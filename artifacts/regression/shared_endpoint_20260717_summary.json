@@ -1,0 +1,43 @@
+{
+  "old_bottom": "2026-07-17T08:00:00+00:00",
+  "replacement_bottom": "2026-07-17T13:00:00+00:00",
+  "corrected_strokes": [
+    {
+      "direction": "down",
+      "start": "2026-07-17T01:00:00+00:00",
+      "end": "2026-07-17T13:00:00+00:00",
+      "start_value": 12,
+      "end_value": 3
+    },
+    {
+      "direction": "up",
+      "start": "2026-07-17T13:00:00+00:00",
+      "end": "2026-07-17T18:00:00+00:00",
+      "start_value": 3,
+      "end_value": 16
+    }
+  ],
+  "old_baseline_strokes": [
+    {
+      "direction": "down",
+      "start": "2026-07-17T01:00:00+00:00",
+      "end": "2026-07-17T08:00:00+00:00",
+      "start_value": 12,
+      "end_value": 4
+    },
+    {
+      "direction": "up",
+      "start": "2026-07-17T08:00:00+00:00",
+      "end": "2026-07-17T18:00:00+00:00",
+      "start_value": 4,
+      "end_value": 16
+    }
+  ],
+  "shared_endpoint_replacements": [
+    {
+      "time": "2026-07-17T13:00:00+00:00",
+      "message": "候选向上笔内部出现更极端的底分型 3 (2026-07-17T13:00:00+00:00)，替换旧共享端点 4 (2026-07-17T08:00:00+00:00)"
+    }
+  ],
+  "chain_validation_issues": []
+}

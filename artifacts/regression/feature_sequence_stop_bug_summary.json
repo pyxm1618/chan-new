@@ -1,0 +1,30 @@
+{
+  "dataset": "DEMO / deterministic 5m regression; not real market data",
+  "root_cause": "first non-actual-break feature fractal stopped the whole scan instead of resetting and continuing",
+  "v0.10.4_legacy": {
+    "confirmed_strokes": 338,
+    "confirmed_segments": 3,
+    "feature_elements": 35,
+    "feature_fractals": 5,
+    "unfinished_segment_strokes": 317,
+    "feature_tail_position": 36,
+    "last_stroke_position": 337,
+    "feature_tail_gap": 301
+  },
+  "v0.10.5_fixed": {
+    "confirmed_strokes": 338,
+    "confirmed_segments": 61,
+    "feature_elements": 307,
+    "feature_fractals": 63,
+    "unfinished_segment_strokes": 3,
+    "feature_tail_position": 337,
+    "last_stroke_position": 337,
+    "feature_tail_gap": 0
+  },
+  "validation": {
+    "segment_validation_issues": 0,
+    "reference_all_match": true,
+    "reference_segment_match_count": 61,
+    "reference_evidence_match_count": 61
+  }
+}
