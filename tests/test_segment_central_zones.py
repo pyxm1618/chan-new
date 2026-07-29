@@ -158,11 +158,11 @@ def test_real_snapshot_has_one_segment_zone_and_matches_reference() -> None:
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
     result = analyze_bars(bars, min_bi_len=6)
 
-    assert len(result.segments) == 4
+    assert len(result.segments) == 3
     assert len(result.segment_central_zones) == 1
     zone = result.segment_central_zones[0]
-    assert [x.index for x in zone.segments] == [0, 1, 2, 3]
-    assert (zone.zd, zone.zg) == (7816.01, 8333.0)
+    assert [x.index for x in zone.segments] == [0, 1, 2]
+    assert (zone.zd, zone.zg) == (7917.0, 8124.92)
     comparison = compare_segment_central_zones_with_reference(
         result.segment_central_zones,
         result.segment_central_zone_candidates,

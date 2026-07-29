@@ -1,0 +1,234 @@
+{
+  "dataset": "DEMO / deterministic 5m regression; not real market data",
+  "rule": {
+    "up": "start is lowest bottom and end is highest top inside candidate",
+    "down": "start is highest top and end is lowest bottom inside candidate",
+    "selection": "earliest complete end; same end uses more extreme start; same price uses later start"
+  },
+  "legacy_invalid_first_segment": {
+    "start_position": 0,
+    "end_position": 7,
+    "direction": "down",
+    "start_value": 109.0806836428213,
+    "end_value": 90.02383139102206,
+    "problem": "internal top 110.1655985483843 exceeded the candidate start top"
+  },
+  "merged_first_segment": {
+    "start_position": 1,
+    "end_position": 4,
+    "direction": "up",
+    "start_value": 90.21135257685897,
+    "end_value": 110.1655985483843,
+    "unresolved_prefix_strokes": 1
+  },
+  "candidate_extreme_violations": 230,
+  "truncation_checks": [
+    {
+      "offset": 0,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 1,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 2,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 3,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 4,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 5,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 6,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 7,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 8,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 9,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 10,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 11,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 12,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 13,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 14,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 15,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 16,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 17,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 18,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 19,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 20,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 21,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 22,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 23,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 24,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 25,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 26,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 27,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 28,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 29,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 30,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 31,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 32,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 33,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 34,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 35,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 36,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 37,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 38,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    },
+    {
+      "offset": 39,
+      "first_end_in_full_chain": true,
+      "tail_match": true
+    }
+  ],
+  "validation": {
+    "segment_validation_issues": 0,
+    "reference_all_match": true,
+    "reference_segment_match_count": 54,
+    "reference_evidence_match_count": 54,
+    "all_truncation_tails_match": true
+  }
+}

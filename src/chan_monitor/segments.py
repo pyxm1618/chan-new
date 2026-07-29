@@ -75,6 +75,25 @@ class _ScanOutcome:
     elements: list[FeatureElement]
     fractals: list[FeatureFractal]
     diagnostics: list[SegmentDiagnostic]
+    gap_origin: FeatureFractal | None = None
+    final_endpoint: Fractal | None = None
+
+
+@dataclass(slots=True)
+class _DetectorTrace:
+    candidates: list[FeatureFractal]
+    elements: list[FeatureElement]
+    fractals: list[FeatureFractal]
+
+
+@dataclass(slots=True)
+class _ReverseAttempt:
+    endpoint_position: int
+    endpoint: Fractal
+    trace: _DetectorTrace
+    confirmed: FeatureFractal | None
+    active_from: int
+    active_until: int | None = None
 
 
 class _FeatureDetector:
@@ -436,6 +455,8 @@ def detect_segments(
                 confirmation=current.confirmation or "UNKNOWN",
                 primary_fractal=current.primary,
                 reverse_fractal=current.reverse,
+                gap_origin_fractal=current.gap_origin,
+                final_endpoint=current.final_endpoint or endpoints[end],
             )
         )
 
@@ -590,6 +611,14 @@ def validate_segment_chain(
                     dt=segment.start_dt,
                 )
             )
+        if i == 0 and not _first_segment_extremes_valid(values, endpoints, start, end):
+            issues.append(
+                SegmentDiagnostic(
+                    code="FIRST_SEGMENT_EXTREME_VIOLATION",
+                    message="首条线段的起点或终点不是段内同类端点极值",
+                    dt=segment.start_dt,
+                )
+            )
 
         if i < len(evidence_values):
             item = evidence_values[i]
@@ -617,14 +646,21 @@ def validate_segment_chain(
                         dt=segment.end_dt,
                     )
                 )
-            if item.confirmation == "GAP_REVERSE_FRACTAL" and (
-                not item.primary_fractal.gap or item.reverse_fractal is None
-            ):
-                issues.append(
-                    SegmentDiagnostic(
-                        code="GAP_CONFIRMATION_EVIDENCE_MISSING",
-                        message=f"第 {i} 线段缺口确认缺少反向特征分型",
-                        dt=segment.end_dt,
+            if item.confirmation == "GAP_REVERSE_FRACTAL":
+                origin = item.gap_origin_fractal or item.primary_fractal
+                if not origin.gap or item.reverse_fractal is None:
+                    issues.append(
+                        SegmentDiagnostic(
+                            code="GAP_CONFIRMATION_EVIDENCE_MISSING",
+                            message=f"第 {i} 线段缺口确认缺少起始缺口分型或反向分型",
+                            dt=segment.end_dt,
+                        )
+                    )
+                issues.extend(
+                    _validate_gap_endpoint_not_superseded(
+                        strokes=values,
+                        evidence=item,
+                        segment_index=i,
                     )
                 )
 
@@ -649,55 +685,216 @@ def validate_segment_chain(
     return tuple(issues)
 
 
+
+def _validate_gap_endpoint_not_superseded(
+    *,
+    strokes: Sequence[Stroke],
+    evidence: SegmentEvidence,
+    segment_index: int,
+) -> tuple[SegmentDiagnostic, ...]:
+    """确认前最终端点必须是等待区间内的同类极值。"""
+    if evidence.confirmation != "GAP_REVERSE_FRACTAL":
+        return ()
+    direction = strokes[evidence.start_position].direction
+    origin = evidence.gap_origin_fractal or evidence.primary_fractal
+    final_position = evidence.end_position
+    final_endpoint = evidence.final_endpoint or strokes[final_position].fx_a
+    feature_direction = _opposite(direction)
+    for position in range(origin.endpoint_position + 1, len(strokes)):
+        if position > evidence.confirmed_at_position:
+            break
+        stroke = strokes[position]
+        if stroke.direction is not feature_direction:
+            continue
+        endpoint = stroke.fx_a
+        if endpoint.mark is not origin.mark:
+            continue
+        if _is_more_extreme_endpoint(
+            endpoint,
+            final_endpoint,
+            direction,
+            position=position,
+            current_position=final_position,
+        ):
+            return (
+                SegmentDiagnostic(
+                    code="GAP_ENDPOINT_SUPERSEDED_BEFORE_CONFIRMATION",
+                    message=(
+                        f"第 {segment_index} 线段在确认前仍存在未迁移的更极端端点："
+                        f"当前第 {final_position} 笔 {final_endpoint.value:.12g}，"
+                        f"候选第 {position} 笔 {endpoint.value:.12g}"
+                    ),
+                    dt=endpoint.dt,
+                ),
+            )
+    return ()
+
+def _first_segment_extremes_valid(
+    strokes: Sequence[Stroke],
+    endpoints: Sequence[Fractal],
+    start_position: int,
+    end_position: int,
+) -> bool:
+    """校验有限窗口首段候选的段内同类端点极值。
+
+    该规则不能凭空恢复窗口之前的完整历史，但可以排除一种确定错误：
+    候选首段内部已经出现比起点更极端的同类起点，或比终点更极端的
+    同类终点。这样的候选不可能是当前窗口内自洽的首段。
+    """
+    if (
+        start_position < 0
+        or start_position >= len(strokes)
+        or end_position <= start_position
+        or end_position >= len(endpoints)
+    ):
+        return False
+    if not _candidate_can_end(strokes, start_position, end_position):
+        return False
+
+    direction = strokes[start_position].direction
+    start_side = endpoints[start_position : end_position + 1 : 2]
+    end_side = endpoints[start_position + 1 : end_position + 1 : 2]
+    if not start_side or not end_side:
+        return False
+
+    start_value = endpoints[start_position].value
+    end_value = endpoints[end_position].value
+    if direction is StrokeDirection.UP:
+        return (
+            start_value <= min(x.value for x in start_side) + _EPS
+            and end_value >= max(x.value for x in end_side) - _EPS
+        )
+    return (
+        start_value >= max(x.value for x in start_side) - _EPS
+        and end_value <= min(x.value for x in end_side) + _EPS
+    )
+
+
 def _choose_first_segment(
     strokes: Sequence[Stroke], endpoints: Sequence[Fractal]
 ) -> _ScanOutcome:
-    attempts: list[_ScanOutcome] = []
-    # 有限窗口可能从一条既有线段中部开始；依次尝试每个笔端点，并优先采用
-    # 最靠前、能够被完整确认的起点。此前的笔明确标记为“窗口前缀未解析”。
-    for start in range(max(0, len(strokes) - 2)):
-        if not _first_three_overlap(strokes, start):
+    """从所有可能起点中选择最早完成且段内边界合法的首段。
+
+    各起点独立扫描。只有同时通过标准特征序列确认和段内同类端点
+    极值检查的候选，才允许成为首条已确认线段。被明确排除的完整候选
+    不得通过“未完成候选”回退分支重新进入结果。
+    """
+    confirmed: list[_ScanOutcome] = []
+    incomplete: list[_ScanOutcome] = []
+    diagnostics: list[SegmentDiagnostic] = []
+
+    for start_position in range(max(0, len(strokes) - 2)):
+        if not _first_three_overlap(strokes, start_position):
             continue
-        outcome = _scan_segment(strokes, endpoints, start)
-        attempts.append(outcome)
-        if outcome.end_position is not None:
-            return outcome
-    if not attempts:
-        return _ScanOutcome(0, None, None, None, None, None, [], [], [])
-    return max(
-        attempts,
-        key=lambda x: (len(x.fractals), len(x.elements), -x.start_position),
+        outcome = _scan_segment(strokes, endpoints, start_position)
+        diagnostics.extend(outcome.diagnostics)
+        if outcome.end_position is None:
+            incomplete.append(outcome)
+            continue
+
+        if not _first_segment_extremes_valid(
+            strokes,
+            endpoints,
+            start_position,
+            outcome.end_position,
+        ):
+            diagnostics.append(
+                SegmentDiagnostic(
+                    code="FIRST_SEGMENT_EXTREME_VIOLATION",
+                    message=(
+                        f"首段候选 {start_position}→{outcome.end_position} "
+                        "内部出现了比起点或终点更极端的同类端点，候选已排除"
+                    ),
+                    dt=endpoints[start_position].dt,
+                )
+            )
+            continue
+        confirmed.append(outcome)
+
+    if confirmed:
+        def confirmed_key(outcome: _ScanOutcome) -> tuple[int, float, int, int]:
+            start_position = outcome.start_position
+            direction = strokes[start_position].direction
+            start_value = endpoints[start_position].value
+            extreme_key = (
+                start_value
+                if direction is StrokeDirection.UP
+                else -start_value
+            )
+            confirmed_at = (
+                outcome.confirmed_at_position
+                if outcome.confirmed_at_position is not None
+                else len(strokes)
+            )
+            return (
+                outcome.end_position
+                if outcome.end_position is not None
+                else len(strokes),
+                extreme_key,
+                -start_position,
+                confirmed_at,
+            )
+
+        selected = min(confirmed, key=confirmed_key)
+        selected.diagnostics = _dedupe_diagnostics(diagnostics)
+        return selected
+
+    if incomplete:
+        selected = max(
+            incomplete,
+            key=lambda x: (len(x.fractals), len(x.elements), -x.start_position),
+        )
+        selected.diagnostics = _dedupe_diagnostics(diagnostics)
+        return selected
+
+    return _ScanOutcome(
+        start_position=0,
+        end_position=None,
+        primary=None,
+        reverse=None,
+        confirmation=None,
+        confirmed_at_position=None,
+        elements=[],
+        fractals=[],
+        diagnostics=_dedupe_diagnostics(diagnostics),
     )
 
 
 def _scan_segment(
     strokes: Sequence[Stroke], endpoints: Sequence[Fractal], start_position: int
 ) -> _ScanOutcome:
+    """扫描一条线段，并在有缺口等待期持续迁移极值端点。
+
+    第一种情况（主特征分型无缺口）可以直接确认。第二种情况一旦由有缺口
+    主分型启动，在反向特征序列确认之前，任何同类特征笔形成的更高顶或更低
+    底都会立即替换旧端点，并从新端点重启反向序列。这样不会把等待期间已经
+    失效的旧极值锁死为线段终点。
+    """
     del endpoints
     direction = strokes[start_position].direction
-    primary_detector = _FeatureDetector(
+    primary_trace = _trace_feature_detector(
         strokes,
         segment_direction=direction,
         sequence_start_position=start_position,
-        require_actual_break=True,
+        feed_start=start_position + 1,
     )
     diagnostics: list[SegmentDiagnostic] = []
-    primary_candidate: FeatureFractal | None = None
+    candidate_diagnostics: list[tuple[int, SegmentDiagnostic]] = []
 
-    position = start_position + 1
-    pending_primary: FeatureFractal | None = None
-    while position < len(strokes) or pending_primary is not None:
-        if pending_primary is not None:
-            fractal = pending_primary
-            pending_primary = None
-        else:
-            fractal = primary_detector.add_position(position)
-            position += 1
-        if fractal is None:
-            continue
-        primary_candidate = fractal
+    valid_confirmed: list[FeatureFractal] = []
+    last_candidate: FeatureFractal | None = None
+    for fractal in sorted(
+        primary_trace.candidates,
+        key=lambda x: (
+            x.detected_at_position,
+            x.endpoint_position,
+            x.middle.last_stroke_position,
+        ),
+    ):
+        last_candidate = fractal
         if fractal.break_status is FeatureBreakStatus.PENDING:
-            diagnostics.append(
+            candidate_diagnostics.append((
+                fractal.detected_at_position,
                 SegmentDiagnostic(
                     code="FEATURE_FRACTAL_WAIT_ACTUAL_BREAK",
                     message=(
@@ -705,11 +902,12 @@ def _scan_segment(
                         "但当前位于数据尾部，真实突破证据尚不完整，暂不确认线段"
                     ),
                     dt=fractal.dt,
-                )
-            )
-            break
+                ),
+            ))
+            continue
         if fractal.break_status is FeatureBreakStatus.REJECTED:
-            diagnostics.append(
+            candidate_diagnostics.append((
+                fractal.detected_at_position,
                 SegmentDiagnostic(
                     code="FEATURE_FRACTAL_REJECTED_NO_ACTUAL_BREAK",
                     message=(
@@ -717,129 +915,423 @@ def _scan_segment(
                         "没有形成真实突破，重置标准特征序列并继续扫描"
                     ),
                     dt=fractal.dt,
-                )
-            )
-            pending_primary = primary_detector._reset_and_replay()
-            primary_candidate = None
+                ),
+            ))
             continue
         if not _candidate_can_end(strokes, start_position, fractal.endpoint_position):
-            diagnostics.append(
+            candidate_diagnostics.append((
+                fractal.detected_at_position,
                 SegmentDiagnostic(
                     code="FEATURE_FRACTAL_TOO_EARLY",
                     message="特征分型对应端点尚不满足线段至少三笔与首三笔重叠",
                     dt=fractal.dt,
-                )
-            )
-            # 该分型不能作为线段终点。重放时可能立即得到下一个分型，
-            # 必须在追加新笔前先处理它，否则检测器会停留在三个元素状态。
-            pending_primary = primary_detector._reset_and_replay()
-            primary_candidate = None
-            continue
-
-        if not fractal.gap:
-            return _ScanOutcome(
-                start_position=start_position,
-                end_position=fractal.endpoint_position,
-                primary=fractal,
-                reverse=None,
-                confirmation="NO_GAP",
-                confirmed_at_position=fractal.detected_at_position,
-                elements=list(primary_detector.audit_elements),
-                fractals=list(primary_detector.audit_fractals),
-                diagnostics=diagnostics,
-            )
-
-        diagnostics.append(
-            SegmentDiagnostic(
-                code="FEATURE_GAP_WAIT_REVERSE",
-                message=(
-                    f"{fractal.dt.isoformat()} 的主特征分型第一、二元素有缺口，"
-                    "等待反向标准特征序列出现分型"
                 ),
-                dt=fractal.dt,
-            )
-        )
-        reverse_detector = _FeatureDetector(
-            strokes,
-            segment_direction=_opposite(direction),
-            sequence_start_position=fractal.endpoint_position,
-            require_actual_break=True,
-        )
-        reverse_position = fractal.endpoint_position + 1
-        pending_reverse: FeatureFractal | None = None
-        while reverse_position < len(strokes) or pending_reverse is not None:
-            if pending_reverse is not None:
-                reverse = pending_reverse
-                pending_reverse = None
-            else:
-                reverse = reverse_detector.add_position(reverse_position)
-                reverse_position += 1
-            if reverse is None:
-                continue
-            if reverse.break_status is FeatureBreakStatus.PENDING:
-                diagnostics.append(
-                    SegmentDiagnostic(
-                        code="REVERSE_FEATURE_WAIT_ACTUAL_BREAK",
-                        message=(
-                            f"{reverse.dt.isoformat()} 的反向特征分型位于数据尾部，"
-                            "真实突破证据尚不完整"
-                        ),
-                        dt=reverse.dt,
-                    )
-                )
-                break
-            if reverse.break_status is FeatureBreakStatus.REJECTED:
-                diagnostics.append(
-                    SegmentDiagnostic(
-                        code="REVERSE_FEATURE_REJECTED_NO_ACTUAL_BREAK",
-                        message=(
-                            f"{reverse.dt.isoformat()} 的反向特征分型已被充分后续数据否定，"
-                            "重置反向标准特征序列并继续扫描"
-                        ),
-                        dt=reverse.dt,
-                    )
-                )
-                pending_reverse = reverse_detector._reset_and_replay()
-                continue
-            return _ScanOutcome(
-                start_position=start_position,
-                end_position=fractal.endpoint_position,
-                primary=fractal,
-                reverse=reverse,
-                confirmation="GAP_REVERSE_FRACTAL",
-                confirmed_at_position=reverse.detected_at_position,
-                elements=[
-                    *primary_detector.audit_elements,
-                    *reverse_detector.audit_elements,
-                ],
-                fractals=[
-                    *primary_detector.audit_fractals,
-                    *reverse_detector.audit_fractals,
-                ],
-                diagnostics=diagnostics,
-            )
+            ))
+            continue
+        valid_confirmed.append(fractal)
+
+    if not valid_confirmed:
+        cutoff = len(strokes) - 1
         return _ScanOutcome(
             start_position=start_position,
             end_position=None,
-            primary=fractal,
+            primary=last_candidate,
             reverse=None,
             confirmation=None,
             confirmed_at_position=None,
-            elements=list(primary_detector.audit_elements),
-            fractals=list(primary_detector.audit_fractals),
+            elements=_elements_through(primary_trace.elements, cutoff),
+            fractals=_fractals_through(primary_trace.fractals, cutoff),
+            diagnostics=_diagnostics_through(candidate_diagnostics, cutoff),
+        )
+
+    # 在尚未进入第二种“缺口 + 反向确认”流程前，最早确认的主分型决定行为。
+    first_time = min(x.detected_at_position for x in valid_confirmed)
+    first_group = [x for x in valid_confirmed if x.detected_at_position == first_time]
+    first = _most_extreme_candidate(first_group, direction)
+    if not first.gap:
+        return _ScanOutcome(
+            start_position=start_position,
+            end_position=first.endpoint_position,
+            primary=first,
+            reverse=None,
+            confirmation="NO_GAP",
+            confirmed_at_position=first.detected_at_position,
+            elements=_elements_through(primary_trace.elements, first.detected_at_position),
+            fractals=_fractals_through(primary_trace.fractals, first.detected_at_position),
+            diagnostics=_diagnostics_through(
+                candidate_diagnostics, first.detected_at_position
+            ),
+            final_endpoint=strokes[first.endpoint_position].fx_a,
+        )
+
+    gap_origin = first
+    active_position = first.endpoint_position
+    active_endpoint = strokes[active_position].fx_a
+    reverse_attempts: list[_ReverseAttempt] = []
+    active_reverse = _start_reverse_attempt(
+        strokes,
+        direction,
+        endpoint_position=active_position,
+        active_from=first.detected_at_position,
+    )
+    reverse_attempts.append(active_reverse)
+    diagnostics.append(
+        SegmentDiagnostic(
+            code="FEATURE_GAP_WAIT_REVERSE",
+            message=(
+                f"{first.dt.isoformat()} 的主特征分型第一、二元素有缺口，"
+                "进入反向特征序列确认；等待期间持续跟踪同类极值端点"
+            ),
+            dt=first.dt,
+        )
+    )
+
+    feature_direction = _opposite(direction)
+    for position in range(first.endpoint_position + 1, len(strokes)):
+        # 旧反向分型严格早于当前新笔时，旧端点已经被确认；同一位置出现
+        # 新极值时优先迁移，避免确认事件与新极值竞争时锁死旧端点。
+        if (
+            active_reverse.confirmed is not None
+            and active_reverse.confirmed.detected_at_position < position
+        ):
+            return _gap_outcome(
+                strokes=strokes,
+                start_position=start_position,
+                end_position=active_position,
+                gap_origin=gap_origin,
+                primary_candidates=valid_confirmed,
+                reverse_attempts=reverse_attempts,
+                active_reverse=active_reverse,
+                primary_trace=primary_trace,
+                candidate_diagnostics=candidate_diagnostics,
+                diagnostics=diagnostics,
+            )
+
+        stroke = strokes[position]
+        if stroke.direction is not feature_direction:
+            continue
+        endpoint = stroke.fx_a
+        if endpoint.mark is not gap_origin.mark:  # pragma: no cover - 笔方向不变量
+            continue
+        if not _is_more_extreme_endpoint(
+            endpoint,
+            active_endpoint,
+            direction,
+            position=position,
+            current_position=active_position,
+        ):
+            continue
+
+        active_reverse.active_until = position
+        diagnostics.append(
+            SegmentDiagnostic(
+                code="GAP_PRIMARY_ENDPOINT_REPLACED",
+                message=(
+                    f"有缺口候选等待反向确认期间，线段端点由第 "
+                    f"{active_position} 笔 {active_endpoint.value:.12g} 迁移到第 "
+                    f"{position} 笔 {endpoint.value:.12g}；旧反向序列作废，"
+                    "并从新极值端点重新开始"
+                ),
+                dt=endpoint.dt,
+            )
+        )
+        active_position = position
+        active_endpoint = endpoint
+        active_reverse = _start_reverse_attempt(
+            strokes,
+            direction,
+            endpoint_position=active_position,
+            active_from=position,
+        )
+        reverse_attempts.append(active_reverse)
+
+        if (
+            active_reverse.confirmed is not None
+            and active_reverse.confirmed.detected_at_position <= position
+        ):
+            return _gap_outcome(
+                strokes=strokes,
+                start_position=start_position,
+                end_position=active_position,
+                gap_origin=gap_origin,
+                primary_candidates=valid_confirmed,
+                reverse_attempts=reverse_attempts,
+                active_reverse=active_reverse,
+                primary_trace=primary_trace,
+                candidate_diagnostics=candidate_diagnostics,
+                diagnostics=diagnostics,
+            )
+
+    if active_reverse.confirmed is not None:
+        return _gap_outcome(
+            strokes=strokes,
+            start_position=start_position,
+            end_position=active_position,
+            gap_origin=gap_origin,
+            primary_candidates=valid_confirmed,
+            reverse_attempts=reverse_attempts,
+            active_reverse=active_reverse,
+            primary_trace=primary_trace,
+            candidate_diagnostics=candidate_diagnostics,
             diagnostics=diagnostics,
         )
 
+    diagnostics.append(
+        SegmentDiagnostic(
+            code="REVERSE_FEATURE_WAIT_CONFIRMATION",
+            message=(
+                f"第 {active_position} 笔的最新极值端点尚未得到反向标准特征序列"
+                "确认，保留为未完成线段"
+            ),
+            dt=active_endpoint.dt,
+        )
+    )
+    cutoff = len(strokes) - 1
+    elements = _elements_through(primary_trace.elements, cutoff)
+    fractals = _fractals_through(primary_trace.fractals, cutoff)
+    elements.extend(_reverse_elements_through((active_reverse,), cutoff))
+    fractals.extend(_reverse_fractals_through((active_reverse,), cutoff))
+    primary = _primary_for_endpoint(
+        valid_confirmed, active_position, cutoff, fallback=gap_origin
+    )
     return _ScanOutcome(
         start_position=start_position,
         end_position=None,
-        primary=primary_candidate,
+        primary=primary,
         reverse=None,
         confirmation=None,
         confirmed_at_position=None,
-        elements=list(primary_detector.audit_elements),
-        fractals=list(primary_detector.audit_fractals),
-        diagnostics=diagnostics,
+        elements=elements,
+        fractals=fractals,
+        diagnostics=[
+            *_diagnostics_through(candidate_diagnostics, cutoff),
+            *diagnostics,
+        ],
+        gap_origin=gap_origin,
+        final_endpoint=active_endpoint,
+    )
+
+
+def _trace_feature_detector(
+    strokes: Sequence[Stroke],
+    *,
+    segment_direction: StrokeDirection,
+    sequence_start_position: int,
+    feed_start: int,
+) -> _DetectorTrace:
+    """完整回放一个标准特征序列检测器并收集所有候选事件。"""
+    detector = _FeatureDetector(
+        strokes,
+        segment_direction=segment_direction,
+        sequence_start_position=sequence_start_position,
+        require_actual_break=True,
+    )
+    candidates: list[FeatureFractal] = []
+    seen: set[tuple] = set()
+    position = feed_start
+    pending: FeatureFractal | None = None
+    guard = max(32, len(strokes) * 8)
+    steps = 0
+    while position < len(strokes) or pending is not None:
+        steps += 1
+        if steps > guard:  # pragma: no cover - 状态机死循环防御
+            raise RuntimeError("标准特征序列回放超过安全步数")
+        if pending is not None:
+            fractal = pending
+            pending = None
+        else:
+            fractal = detector.add_position(position)
+            position += 1
+        if fractal is None:
+            continue
+        signature = _feature_fractal_signature(fractal)
+        if signature not in seen:
+            seen.add(signature)
+            candidates.append(fractal)
+        pending = detector._reset_and_replay()
+
+    return _DetectorTrace(
+        candidates=candidates,
+        elements=list(detector.audit_elements),
+        fractals=list(detector.audit_fractals),
+    )
+
+
+def _start_reverse_attempt(
+    strokes: Sequence[Stroke],
+    direction: StrokeDirection,
+    *,
+    endpoint_position: int,
+    active_from: int,
+) -> _ReverseAttempt:
+    trace = _trace_feature_detector(
+        strokes,
+        segment_direction=_opposite(direction),
+        sequence_start_position=endpoint_position,
+        feed_start=endpoint_position + 1,
+    )
+    confirmed = next(
+        (
+            fractal
+            for fractal in sorted(
+                trace.candidates,
+                key=lambda x: (x.detected_at_position, x.endpoint_position),
+            )
+            if fractal.break_status is FeatureBreakStatus.CONFIRMED
+            and fractal.detected_at_position >= active_from
+        ),
+        None,
+    )
+    return _ReverseAttempt(
+        endpoint_position=endpoint_position,
+        endpoint=strokes[endpoint_position].fx_a,
+        trace=trace,
+        confirmed=confirmed,
+        active_from=active_from,
+    )
+
+
+def _gap_outcome(
+    *,
+    strokes: Sequence[Stroke],
+    start_position: int,
+    end_position: int,
+    gap_origin: FeatureFractal,
+    primary_candidates: Sequence[FeatureFractal],
+    reverse_attempts: Sequence[_ReverseAttempt],
+    active_reverse: _ReverseAttempt,
+    primary_trace: _DetectorTrace,
+    candidate_diagnostics: Sequence[tuple[int, SegmentDiagnostic]],
+    diagnostics: list[SegmentDiagnostic],
+) -> _ScanOutcome:
+    reverse = active_reverse.confirmed
+    if reverse is None:  # pragma: no cover - 调用方不变量
+        raise RuntimeError("缺口确认结果缺少反向特征分型")
+    cutoff = reverse.detected_at_position
+    primary = _primary_for_endpoint(
+        primary_candidates, end_position, cutoff, fallback=gap_origin
+    )
+    elements = _elements_through(primary_trace.elements, cutoff)
+    fractals = _fractals_through(primary_trace.fractals, cutoff)
+    elements.extend(_reverse_elements_through((active_reverse,), cutoff))
+    fractals.extend(_reverse_fractals_through((active_reverse,), cutoff))
+    return _ScanOutcome(
+        start_position=start_position,
+        end_position=end_position,
+        primary=primary,
+        reverse=reverse,
+        confirmation="GAP_REVERSE_FRACTAL",
+        confirmed_at_position=cutoff,
+        elements=elements,
+        fractals=fractals,
+        diagnostics=[
+            *_diagnostics_through(candidate_diagnostics, cutoff),
+            *diagnostics,
+        ],
+        gap_origin=gap_origin,
+        final_endpoint=strokes[end_position].fx_a,
+    )
+
+
+def _primary_for_endpoint(
+    candidates: Sequence[FeatureFractal],
+    endpoint_position: int,
+    cutoff: int,
+    *,
+    fallback: FeatureFractal,
+) -> FeatureFractal:
+    matches = [
+        x
+        for x in candidates
+        if x.endpoint_position == endpoint_position
+        and x.detected_at_position <= cutoff
+        and x.break_status is FeatureBreakStatus.CONFIRMED
+    ]
+    if not matches:
+        return fallback
+    return max(matches, key=lambda x: (x.detected_at_position, x.middle.last_stroke_position))
+
+
+def _most_extreme_candidate(
+    candidates: Sequence[FeatureFractal], direction: StrokeDirection
+) -> FeatureFractal:
+    if direction is StrokeDirection.UP:
+        return max(
+            candidates,
+            key=lambda x: (x.value, x.endpoint_position, -x.detected_at_position),
+        )
+    return min(
+        candidates,
+        key=lambda x: (x.value, -x.endpoint_position, x.detected_at_position),
+    )
+
+
+def _is_more_extreme_endpoint(
+    candidate: Fractal,
+    current: Fractal,
+    direction: StrokeDirection,
+    *,
+    position: int,
+    current_position: int,
+) -> bool:
+    if direction is StrokeDirection.UP:
+        return candidate.value > current.value + _EPS or (
+            abs(candidate.value - current.value) <= _EPS and position > current_position
+        )
+    return candidate.value < current.value - _EPS or (
+        abs(candidate.value - current.value) <= _EPS and position > current_position
+    )
+
+
+
+def _diagnostics_through(
+    values: Sequence[tuple[int, SegmentDiagnostic]], cutoff: int
+) -> list[SegmentDiagnostic]:
+    return [diagnostic for detected_at, diagnostic in values if detected_at <= cutoff]
+
+def _elements_through(
+    elements: Sequence[FeatureElement], cutoff: int
+) -> list[FeatureElement]:
+    return [x for x in elements if x.last_stroke_position <= cutoff]
+
+
+def _fractals_through(
+    fractals: Sequence[FeatureFractal], cutoff: int
+) -> list[FeatureFractal]:
+    return [x for x in fractals if x.detected_at_position <= cutoff]
+
+
+def _reverse_elements_through(
+    attempts: Sequence[_ReverseAttempt], cutoff: int
+) -> list[FeatureElement]:
+    output: list[FeatureElement] = []
+    for attempt in attempts:
+        active_cutoff = min(cutoff, attempt.active_until if attempt.active_until is not None else cutoff)
+        output.extend(_elements_through(attempt.trace.elements, active_cutoff))
+    return output
+
+
+def _reverse_fractals_through(
+    attempts: Sequence[_ReverseAttempt], cutoff: int
+) -> list[FeatureFractal]:
+    output: list[FeatureFractal] = []
+    for attempt in attempts:
+        active_cutoff = min(cutoff, attempt.active_until if attempt.active_until is not None else cutoff)
+        output.extend(_fractals_through(attempt.trace.fractals, active_cutoff))
+    return output
+
+
+def _feature_fractal_signature(fractal: FeatureFractal) -> tuple:
+    return (
+        fractal.segment_direction,
+        fractal.mark,
+        fractal.endpoint_position,
+        fractal.detected_at_position,
+        fractal.gap,
+        fractal.break_status,
+        fractal.left.stroke_positions,
+        fractal.middle.stroke_positions,
+        fractal.right.stroke_positions,
     )
 
 def _relation(
@@ -925,6 +1417,17 @@ def _dedupe_fractals(values: Iterable[Fractal]) -> list[Fractal]:
     seen: set[tuple] = set()
     for value in values:
         key = _endpoint_key(value)
+        if key not in seen:
+            seen.add(key)
+            result.append(value)
+    return result
+
+
+def _dedupe_diagnostics(values: Iterable[SegmentDiagnostic]) -> list[SegmentDiagnostic]:
+    result: list[SegmentDiagnostic] = []
+    seen: set[tuple] = set()
+    for value in values:
+        key = (value.code, value.dt, value.message)
         if key not in seen:
             seen.add(key)
             result.append(value)

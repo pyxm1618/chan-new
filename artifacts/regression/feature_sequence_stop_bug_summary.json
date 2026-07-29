@@ -11,7 +11,7 @@
     "last_stroke_position": 337,
     "feature_tail_gap": 301
   },
-  "v0.10.5_fixed": {
+  "v0.10.5_continuous_scan_only": {
     "confirmed_strokes": 338,
     "confirmed_segments": 61,
     "feature_elements": 307,
@@ -21,10 +21,21 @@
     "last_stroke_position": 337,
     "feature_tail_gap": 0
   },
+  "v0.10.7_merged_boundary_and_gap_fixes": {
+    "confirmed_strokes": 338,
+    "confirmed_segments": 54,
+    "feature_elements": 623,
+    "feature_fractals": 90,
+    "unfinished_segment_strokes": 3,
+    "feature_tail_position": 337,
+    "last_stroke_position": 337,
+    "feature_tail_gap": 0,
+    "endpoint_replacements": 41
+  },
   "validation": {
     "segment_validation_issues": 0,
     "reference_all_match": true,
-    "reference_segment_match_count": 61,
-    "reference_evidence_match_count": 61
+    "reference_segment_match_count": 54,
+    "reference_evidence_match_count": 54
   }
 }

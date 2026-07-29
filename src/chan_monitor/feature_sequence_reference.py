@@ -198,17 +198,31 @@ def run_feature_sequence_reference(strokes: Sequence[Stroke]) -> tuple[RefSegmen
     values = tuple(strokes)
     if len(values) < 3:
         return ()
-    first = None
+
+    first_candidates: list[RefSegment] = []
     for begin in range(max(0, len(values) - 2)):
         if not _overlap_first_three(values, begin):
             continue
         candidate = _scan(values, begin)
-        if candidate is not None:
-            first = candidate
-            break
-    if first is None:
+        if candidate is None or not _first_segment_extremes_valid(
+            values, candidate.start, candidate.end
+        ):
+            continue
+        first_candidates.append(candidate)
+
+    if not first_candidates:
         return ()
 
+    def first_key(candidate: RefSegment) -> tuple[int, float, int, int]:
+        start_value = values[candidate.start].fx_a.value
+        extreme_key = (
+            start_value
+            if candidate.direction is StrokeDirection.UP
+            else -start_value
+        )
+        return candidate.end, extreme_key, -candidate.start, candidate.confirmed_at
+
+    first = min(first_candidates, key=first_key)
     output = [first]
     begin = first.end
     while len(values) - begin >= 3:
@@ -286,9 +300,135 @@ def compare_feature_sequence_reference(
 
 
 def _scan(strokes: Sequence[Stroke], begin: int) -> RefSegment | None:
+    """独立事件回放。
+
+    主特征序列会完整收集并按“实际检测时间”排序候选，避免检测器重放后
+    才产出的更早候选被遗漏；有缺口等待期间则按原始同类笔端点持续迁移
+    极值，直到反向特征分型锁定当前端点。
+    """
     line_up = strokes[begin].direction is StrokeDirection.UP
+    candidates = _trace_ref_candidates(strokes, line_up=line_up, begin=begin)
+    confirmed = [
+        fx
+        for fx in candidates
+        if fx.status is _RefBreakStatus.CONFIRMED
+        and _valid_boundary(strokes, begin, fx.boundary)
+    ]
+    if not confirmed:
+        return None
+
+    first_time = min(fx.detected for fx in confirmed)
+    first_group = [fx for fx in confirmed if fx.detected == first_time]
+    if line_up:
+        first = max(
+            first_group,
+            key=lambda fx: (
+                strokes[fx.boundary].fx_a.value,
+                fx.boundary,
+                -fx.detected,
+            ),
+        )
+    else:
+        first = min(
+            first_group,
+            key=lambda fx: (
+                strokes[fx.boundary].fx_a.value,
+                -fx.boundary,
+                fx.detected,
+            ),
+        )
+
+    if not first.gap:
+        return RefSegment(
+            begin,
+            first.boundary,
+            strokes[begin].direction,
+            "NO_GAP",
+            first.detected,
+        )
+
+    active = first.boundary
+    active_value = strokes[active].fx_a.value
+    reverse = _find_reverse_confirmation(strokes, active, line_up=line_up)
+    expected = StrokeDirection.DOWN if line_up else StrokeDirection.UP
+
+    for pos in range(active + 1, len(strokes)):
+        if reverse is not None and reverse.detected < pos:
+            return RefSegment(
+                begin,
+                active,
+                strokes[begin].direction,
+                "GAP_REVERSE_FRACTAL",
+                reverse.detected,
+            )
+        stroke = strokes[pos]
+        if stroke.direction is not expected:
+            continue
+        value = stroke.fx_a.value
+        more_extreme = (
+            value > active_value + _EPS
+            if line_up
+            else value < active_value - _EPS
+        ) or (abs(value - active_value) <= _EPS and pos > active)
+        if not more_extreme:
+            continue
+        active = pos
+        active_value = value
+        reverse = _find_reverse_confirmation(strokes, active, line_up=line_up)
+
+    if reverse is None:
+        return None
+    return RefSegment(
+        begin,
+        active,
+        strokes[begin].direction,
+        "GAP_REVERSE_FRACTAL",
+        reverse.detected,
+    )
+
+
+def _trace_ref_candidates(
+    strokes: Sequence[Stroke], *, line_up: bool, begin: int
+) -> list[_RefFX]:
     detector = _RefDetector.create(strokes, line_up=line_up, begin=begin)
-    pos = begin + 1
+    candidates: list[_RefFX] = []
+    seen: set[tuple] = set()
+    position = begin + 1
+    pending: _RefFX | None = None
+    guard = max(32, len(strokes) * 8)
+    steps = 0
+    while position < len(strokes) or pending is not None:
+        steps += 1
+        if steps > guard:  # pragma: no cover - 状态机死循环防御
+            raise RuntimeError("参考特征序列回放超过安全步数")
+        if pending is not None:
+            fx = pending
+            pending = None
+        else:
+            fx = detector.feed(position)
+            position += 1
+        if fx is None:
+            continue
+        signature = (
+            fx.boundary,
+            fx.gap,
+            fx.status,
+            fx.detected,
+            fx.mark,
+            fx.right_end,
+        )
+        if signature not in seen:
+            seen.add(signature)
+            candidates.append(fx)
+        pending = detector._restart()
+    return candidates
+
+
+def _find_reverse_confirmation(
+    strokes: Sequence[Stroke], endpoint: int, *, line_up: bool
+) -> _RefFX | None:
+    detector = _RefDetector.create(strokes, line_up=not line_up, begin=endpoint)
+    pos = endpoint + 1
     pending: _RefFX | None = None
     while pos < len(strokes) or pending is not None:
         if pending is not None:
@@ -299,41 +439,11 @@ def _scan(strokes: Sequence[Stroke], begin: int) -> RefSegment | None:
             pos += 1
         if fx is None:
             continue
+        if fx.status is _RefBreakStatus.CONFIRMED:
+            return fx
         if fx.status is _RefBreakStatus.PENDING:
             return None
-        if fx.status is _RefBreakStatus.REJECTED:
-            pending = detector._restart()
-            continue
-        if not _valid_boundary(strokes, begin, fx.boundary):
-            pending = detector._restart()
-            continue
-        if not fx.gap:
-            return RefSegment(begin, fx.boundary, strokes[begin].direction, "NO_GAP", fx.detected)
-
-        reverse = _RefDetector.create(strokes, line_up=not line_up, begin=fx.boundary)
-        q = fx.boundary + 1
-        pending_reverse: _RefFX | None = None
-        while q < len(strokes) or pending_reverse is not None:
-            if pending_reverse is not None:
-                reverse_fx = pending_reverse
-                pending_reverse = None
-            else:
-                reverse_fx = reverse.feed(q)
-                q += 1
-            if reverse_fx is None:
-                continue
-            if reverse_fx.status is _RefBreakStatus.CONFIRMED:
-                return RefSegment(
-                    begin,
-                    fx.boundary,
-                    strokes[begin].direction,
-                    "GAP_REVERSE_FRACTAL",
-                    reverse_fx.detected,
-                )
-            if reverse_fx.status is _RefBreakStatus.PENDING:
-                return None
-            pending_reverse = reverse._restart()
-        return None
+        pending = detector._restart()
     return None
 
 def _classify(
@@ -410,6 +520,32 @@ def _break_up(
             return _RefBreakStatus.REJECTED, opposite
         return _RefBreakStatus.PENDING, opposite
     return _RefBreakStatus.PENDING, pos
+
+
+
+def _first_segment_extremes_valid(
+    strokes: Sequence[Stroke], begin: int, end: int
+) -> bool:
+    if not _valid_boundary(strokes, begin, end):
+        return False
+    start_positions = range(begin, end + 1, 2)
+    end_positions = range(begin + 1, end + 1, 2)
+    start_values = [strokes[pos].fx_a.value for pos in start_positions]
+    end_values = [strokes[pos].fx_a.value for pos in end_positions]
+    if not start_values or not end_values:
+        return False
+
+    start_value = strokes[begin].fx_a.value
+    end_value = strokes[end].fx_a.value
+    if strokes[begin].direction is StrokeDirection.UP:
+        return (
+            start_value <= min(start_values) + _EPS
+            and end_value >= max(end_values) - _EPS
+        )
+    return (
+        start_value >= max(start_values) - _EPS
+        and end_value <= min(end_values) + _EPS
+    )
 
 
 def _overlap_first_three(strokes: Sequence[Stroke], begin: int) -> bool:
