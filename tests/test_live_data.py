@@ -187,10 +187,12 @@ def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministicall
     assert len(first.merged_bars) == 3721
     assert len(first.fractals) == 851
     assert len(first.strokes) == 338
-    assert len(first.segments) == 61
-    assert len(first.feature_elements) == 307
-    assert len(first.feature_fractals) == 63
-    assert len(first.unfinished_segment_strokes) == 3
+    assert len(first.detected_segments) == 57
+    assert len(first.segments) == 56
+    assert len(first.provisional_segments) == 1
+    assert len(first.feature_elements) == 659
+    assert len(first.feature_fractals) == 88
+    assert len(first.detected_unfinished_segment_strokes) == 6
     assert max(
         position
         for element in first.feature_elements
@@ -198,6 +200,8 @@ def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministicall
     ) == len(first.strokes) - 1
     assert first.strokes == second.strokes
     assert first.segments == second.segments
+    assert first.detected_segments == second.detected_segments
+    assert first.stable_strokes == second.stable_strokes
     assert first.central_zones == second.central_zones
     assert first.segment_central_zones == second.segment_central_zones
     assert first.trading_points == second.trading_points

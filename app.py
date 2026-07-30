@@ -55,7 +55,7 @@ from chan_monitor.segments import SegmentMode, validate_segment_chain
 from chan_monitor.strokes import validate_stroke_chain
 
 
-APP_VERSION = "0.10.5"
+APP_VERSION = "0.10.10"
 
 
 STYLE_WIDGET_KEYS = (
@@ -458,22 +458,28 @@ m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
 m1.metric("原始 K", len(result.raw_bars))
 m2.metric("无包含 K", len(result.merged_bars))
 m3.metric("分型", len(result.fractals))
-m4.metric("笔", len(result.strokes))
-m5.metric("已确认线段", len(result.segments))
-m6.metric("笔中枢", len(result.central_zones))
-m7.metric("线段中枢", len(result.segment_central_zones))
-m8.metric("买卖点", len(result.trading_points))
+m4.metric("完整笔链", len(result.all_strokes))
+m5.metric("稳定笔", len(result.stable_strokes))
+m6.metric("候选笔", len(result.provisional_strokes))
+m7.metric("正式线段", len(result.segments))
+m8.metric("候选线段", len(result.provisional_segments))
 
-live_m1, live_m2, live_m3, live_m4 = st.columns(4)
+structure_m1, structure_m2, structure_m3, structure_m4, structure_m5 = st.columns(5)
+structure_m1.metric("正式笔中枢", len(result.central_zones))
+structure_m2.metric("候选笔中枢", len(result.central_zone_candidates))
+structure_m3.metric("正式线段中枢", len(result.segment_central_zones))
+structure_m4.metric("买卖点", len(result.trading_points))
+structure_m5.metric("数据缺口", bundle.snapshot.gap_count if bundle.snapshot else 0)
+
+live_m1, live_m2, live_m3 = st.columns(3)
 live_m1.metric("实时未收盘 K", 1 if bundle.snapshot and bundle.snapshot.current_bar else 0)
-live_m2.metric("未确认笔虚线", len(live_overlay.provisional_strokes))
-live_m3.metric("未确认线段虚线", len(live_overlay.provisional_segments))
-live_m4.metric("数据缺口", bundle.snapshot.gap_count if bundle.snapshot else 0)
+live_m2.metric("图中候选笔虚线", len(live_overlay.provisional_strokes))
+live_m3.metric("图中候选线段虚线", len(live_overlay.provisional_segments))
 
-with st.expander("实时尾部候选数据（虚线）", expanded=False):
+with st.expander("结构候选尾部数据（虚线）", expanded=False):
     st.caption(
-        "这些行与图中的同色虚线一一对应，会随着当前 K 和后续已收盘 K 迁移或消失；"
-        "它们不参与中枢、买卖点或后续消息确认。"
+        "这些行与图中的同色虚线一一对应，既包括已收盘数据中尚未提交的结构尾部，"
+        "也包括当前未收盘 K 造成的候选变化；它们不参与正式中枢、买卖点或消息确认。"
     )
     provisional_stroke_df = provisional_lines_frame(live_overlay, structure="stroke")
     provisional_segment_df = provisional_lines_frame(live_overlay, structure="segment")
@@ -743,7 +749,7 @@ with central_zone_tab:
         "本阶段使用 CZSC 的笔中枢口径：前三笔的价格重叠区定义 ZD~ZG；后续笔仍与该区间相交时延伸中枢。"
         "先验证连续笔切片、前三笔重叠边界和每笔相交条件，再允许图上绘制。"
     )
-    zone_issues = validate_central_zones(result.central_zones, result.strokes)
+    zone_issues = validate_central_zones(result.central_zones, result.stable_strokes)
     if zone_issues:
         st.error("中枢不变量校验失败，应停止画图并检查数据层。")
         st.dataframe(
@@ -785,7 +791,7 @@ with central_zone_compare_tab:
     central_comparison = compare_central_zones_with_czsc(
         result.central_zones,
         result.central_zone_groups,
-        result.strokes,
+        result.stable_strokes,
     )
     st.caption(
         f"参考：{central_comparison.reference_name}。分组按历史 get_zs_seq 独立执行，"
@@ -820,8 +826,10 @@ with segment_tab:
     st.subheader("标准特征序列线段数据验证")
     st.caption(
         "向上线段只取向下笔组成特征序列并寻找顶分型；向下线段只取向上笔组成特征序列并寻找底分型。"
-        "第一、二特征元素无缺口时直接确认；有缺口时必须等待从候选端点开始的反向特征序列分型。"
-        "所有已确认线段至少三笔、包含奇数笔，且首三笔存在共同重叠区。"
+        "第一、二特征元素无缺口时直接确认；有缺口时必须等待从候选端点开始的反向特征序列分型，"
+        "等待期间若出现更极端的合法端点会迁移并重启反向确认。"
+        "首段会扫描所有可能起点，并额外校验向上段的最低底/最高顶、向下段的最高顶/最低底；"
+        "终点最早的完整候选优先，候选起点之前的笔进入窗口前缀未解析区。"
     )
     feature_tail_position = max(
         (
@@ -843,11 +851,29 @@ with segment_tab:
     fc3.metric("扫描至笔位置", f"{feature_tail_position} / {last_stroke_position}")
     fc4.metric("尾部未扫描笔数", feature_tail_gap)
 
+    first_evidence = result.segment_evidence[0] if result.segment_evidence else None
+    boundary_violations = sum(
+        item.code == "FIRST_SEGMENT_EXTREME_VIOLATION"
+        for item in result.segment_diagnostics
+    )
+    bc1, bc2, bc3, bc4 = st.columns(4)
+    bc1.metric(
+        "首段起点笔位置",
+        first_evidence.start_position if first_evidence is not None else "—",
+    )
+    bc2.metric(
+        "首段终点笔位置",
+        first_evidence.end_position if first_evidence is not None else "—",
+    )
+    bc3.metric("窗口前缀未解析笔", len(result.unresolved_segment_prefix_strokes))
+    bc4.metric("已排除极值违规候选", boundary_violations)
+
     segment_issues = validate_segment_chain(
         result.segments,
-        result.strokes,
+        result.stable_strokes,
         mode=result.segment_mode,
         evidence=result.segment_evidence,
+        exclude_last_stroke_confirmation=True,
     )
     if segment_issues:
         st.error("线段数据层校验失败，应停止绘图并检查下表。")
@@ -923,9 +949,9 @@ with segment_tab:
 
 with segment_compare_tab:
     segment_comparison = compare_feature_sequence_reference(
-        result.segments,
-        result.segment_evidence,
-        result.strokes,
+        result.detected_segments,
+        result.detected_segment_evidence,
+        result.all_strokes,
     )
     st.caption(
         f"参考：{segment_comparison.reference_name}。参考模块不调用生产线段识别器，"
@@ -961,7 +987,10 @@ with segment_compare_tab:
             st.dataframe(frame, use_container_width=True, hide_index=True)
 
 with pen_tab:
-    st.subheader("已识别笔")
+    st.subheader("完整笔链：稳定前缀 + 可回撤尾部")
+    st.caption(
+        "STABLE 笔已经由后续结构事件封存，只增不减；PROVISIONAL 笔仍可能迁移或撤销。"
+    )
     chain_issues = validate_stroke_chain(result.strokes, min_bi_len=result.min_bi_len)
     if chain_issues:
         st.error("最终笔链不变量校验失败。")

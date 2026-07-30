@@ -111,21 +111,31 @@ def test_real_snapshot_central_zones_match_frozen_czsc_logic() -> None:
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
     result = analyze_bars(bars, min_bi_len=6)
+    # 全部当前笔的结果保留为候选，用于与冻结 CZSC 几何算法做兼容校验。
     comparison = compare_central_zones_with_czsc(
-        result.central_zones,
-        result.central_zone_groups,
+        result.central_zone_candidates,
+        result.central_zone_candidate_groups,
         result.strokes,
     )
 
-    assert len(result.central_zone_groups) == 3
-    assert len(result.central_zones) == 2
-    assert [x.stroke_count for x in result.central_zones] == [13, 11]
-    assert [(x.zd, x.zg) for x in result.central_zones] == [
+    assert len(result.central_zone_candidate_groups) == 3
+    assert len(result.central_zone_candidates) == 2
+    assert [x.stroke_count for x in result.central_zone_candidates] == [13, 11]
+    assert [(x.zd, x.zg) for x in result.central_zone_candidates] == [
         (7929.03, 8023.0),
         (9074.34, 9369.8),
     ]
     assert comparison.all_match
-    assert validate_central_zones(result.central_zones, result.strokes) == ()
+    assert validate_central_zones(result.central_zone_candidates, result.strokes) == ()
+
+    # 正式中枢只消费 stable_strokes；第二个中枢仍可继续向右延伸，但种子不回撤。
+    assert len(result.central_zones) == 2
+    assert [x.stroke_count for x in result.central_zones] == [13, 4]
+    assert [(x.zd, x.zg) for x in result.central_zones] == [
+        (7929.03, 8023.0),
+        (9074.34, 9369.8),
+    ]
+    assert validate_central_zones(result.central_zones, result.stable_strokes) == ()
 
 
 def test_batch_and_incremental_results_include_identical_zones() -> None:

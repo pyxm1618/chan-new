@@ -54,12 +54,16 @@ def build_raw_chart(
         _add_strokes(fig, result, style)
         if live_overlay is not None:
             _add_provisional_strokes(fig, live_overlay, style)
+        else:
+            _add_result_provisional_strokes(fig, result, style)
     if show_fractals:
         _add_fractals(fig, result, style)
     if show_segments:
         _add_segments(fig, result, style)
         if live_overlay is not None:
             _add_provisional_segments(fig, live_overlay, style)
+        else:
+            _add_result_provisional_segments(fig, result, style)
     if show_trading_points:
         _add_trading_points(fig, result, style)
     if show_segment_central_zones:
@@ -97,12 +101,16 @@ def build_merged_chart(
         _add_strokes(fig, result, style)
         if live_overlay is not None:
             _add_provisional_strokes(fig, live_overlay, style)
+        else:
+            _add_result_provisional_strokes(fig, result, style)
     if show_fractals:
         _add_fractals(fig, result, style)
     if show_segments:
         _add_segments(fig, result, style)
         if live_overlay is not None:
             _add_provisional_segments(fig, live_overlay, style)
+        else:
+            _add_result_provisional_segments(fig, result, style)
     if show_trading_points:
         _add_trading_points(fig, result, style)
     if show_segment_central_zones:
@@ -190,6 +198,11 @@ def strokes_frame(result: AnalysisResult) -> pd.DataFrame:
         [
             {
                 "笔序号": stroke.index,
+                "状态": (
+                    "STABLE"
+                    if stroke.index < len(result.stable_strokes)
+                    else "PROVISIONAL"
+                ),
                 "方向": f"{stroke.direction.arrow} {stroke.direction.label}",
                 "起点时间": stroke.start_dt,
                 "起点类型": stroke.fx_a.label,
@@ -230,7 +243,15 @@ def segments_frame(result: AnalysisResult) -> pd.DataFrame:
                 "终点价格": segment.end_value,
                 "内部笔数": segment.stroke_count,
                 "确认方式": evidence.confirmation if evidence else None,
-                "主特征分型有缺口": evidence.primary_fractal.gap if evidence else None,
+                "初始主特征分型有缺口": (
+                    (evidence.gap_origin_fractal or evidence.primary_fractal).gap
+                    if evidence else None
+                ),
+                "端点是否迁移": (
+                    evidence.end_position
+                    != (evidence.gap_origin_fractal or evidence.primary_fractal).endpoint_position
+                    if evidence else None
+                ),
                 "确认发生笔位置": evidence.confirmed_at_position if evidence else None,
                 "价差力度": segment.power,
                 "涨跌幅": segment.change,
@@ -259,6 +280,27 @@ def segment_evidence_frame(result: AnalysisResult) -> pd.DataFrame:
                 "主分型时间": item.primary_fractal.dt,
                 "主分型价格": item.primary_fractal.value,
                 "主分型有缺口": item.primary_fractal.gap,
+                "初始缺口端点位置": (
+                    item.gap_origin_fractal.endpoint_position
+                    if item.gap_origin_fractal else None
+                ),
+                "初始缺口端点时间": (
+                    item.gap_origin_fractal.dt if item.gap_origin_fractal else None
+                ),
+                "初始缺口端点价格": (
+                    item.gap_origin_fractal.value if item.gap_origin_fractal else None
+                ),
+                "最终线段端点位置": item.end_position,
+                "最终线段端点时间": (
+                    item.final_endpoint.dt if item.final_endpoint else None
+                ),
+                "最终线段端点价格": (
+                    item.final_endpoint.value if item.final_endpoint else None
+                ),
+                "端点发生迁移": (
+                    item.gap_origin_fractal is not None
+                    and item.end_position != item.gap_origin_fractal.endpoint_position
+                ),
                 "主分型真实突破": item.primary_fractal.actual_break,
                 "主分型突破状态": item.primary_fractal.break_status.label,
                 "主分型三元素": " / ".join(
@@ -733,10 +775,10 @@ def _add_segment_central_zone_status(fig: go.Figure, result: AnalysisResult, sty
 
 
 def _add_segment_central_zones(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> None:
-    """用用户配置的矩形样式绘制三个连续线段重叠形成的中枢。"""
-    if not result.segment_central_zones:
-        return
+    """用用户配置的矩形样式绘制正式线段中枢。
 
+    即使当前没有正式线段中枢，也保留一个空 trace，确保图例和样式配置稳定。
+    """
     for zone in result.segment_central_zones:
         fig.add_shape(
             type="rect",
@@ -907,6 +949,52 @@ def _add_provisional_segments(fig: go.Figure, overlay: LiveStructureOverlay, sty
     )
 
 
+def _add_result_provisional_strokes(
+    fig: go.Figure, result: AnalysisResult, style: ChartStyle
+) -> None:
+    values = tuple(
+        ProvisionalLine(
+            structure="stroke",
+            direction=item.direction,
+            start_dt=item.start_dt,
+            start_value=item.start_value,
+            end_dt=item.end_dt,
+            end_value=item.end_value,
+            reason="尚未进入 stable_strokes，后续 K 仍可能使其迁移或撤销",
+            source_indexes=(item.index,),
+        )
+        for item in result.provisional_strokes
+    )
+    _add_provisional_lines(
+        fig, values, color=style.stroke.color, width=style.stroke.width,
+        marker_size=style.stroke.marker_size, marker_symbol="diamond-open",
+        name="未确认笔（同色虚线）",
+    )
+
+
+def _add_result_provisional_segments(
+    fig: go.Figure, result: AnalysisResult, style: ChartStyle
+) -> None:
+    values = tuple(
+        ProvisionalLine(
+            structure="segment",
+            direction=item.direction,
+            start_dt=item.start_dt,
+            start_value=item.start_value,
+            end_dt=item.end_dt,
+            end_value=item.end_value,
+            reason="已检测但尚未由下一线段推进为 COMMITTED",
+            source_indexes=tuple(x.index for x in item.strokes),
+        )
+        for item in result.provisional_segments
+    )
+    _add_provisional_lines(
+        fig, values, color=style.segment.color, width=style.segment.width,
+        marker_size=style.segment.marker_size, marker_symbol="circle-open",
+        name="未确认线段（同色虚线）",
+    )
+
+
 def _add_provisional_lines(
     fig: go.Figure, values: Sequence[ProvisionalLine], *, color: str, width: float,
     marker_size: float, marker_symbol: str, name: str,
@@ -965,7 +1053,8 @@ def _add_segments(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> 
             _fmt(segment.source_start),
             _fmt(segment.source_end),
             evidence.confirmation if evidence else "未记录",
-            "是" if evidence and evidence.primary_fractal.gap else "否",
+            "是" if evidence and (evidence.gap_origin_fractal or evidence.primary_fractal).gap else "否",
+            "是" if evidence and evidence.gap_origin_fractal and evidence.end_position != evidence.gap_origin_fractal.endpoint_position else "否",
         ]
         xs.extend([segment.start_dt, segment.end_dt, None])
         ys.extend([segment.start_value, segment.end_value, None])
@@ -993,7 +1082,8 @@ def _add_segments(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> 
                 "%{x}<br>端点价格 %{y}<br>内部笔数 %{customdata[2]}<br>"
                 "价差 %{customdata[3]}<br>涨跌幅 %{customdata[4]}<br>"
                 "原始范围 %{customdata[5]} ~ %{customdata[6]}<br>"
-                "确认方式 %{customdata[7]}<br>主特征分型缺口 %{customdata[8]}<extra></extra>"
+                "确认方式 %{customdata[7]}<br>初始主特征分型缺口 %{customdata[8]}<br>"
+                "等待期端点迁移 %{customdata[9]}<extra></extra>"
             ),
             name="线段",
         ),
@@ -1003,14 +1093,14 @@ def _add_segments(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> 
 
 
 def _add_strokes(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> None:
-    if not result.strokes:
+    if not result.stable_strokes:
         return
 
     xs: list[object] = []
     ys: list[float | None] = []
     customdata: list[list[object] | None] = []
     texts: list[str | None] = []
-    for stroke in result.strokes:
+    for stroke in result.stable_strokes:
         detail = [
             stroke.index,
             stroke.direction.label,

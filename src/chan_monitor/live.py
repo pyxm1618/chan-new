@@ -145,11 +145,21 @@ def build_live_overlay(
     *,
     snapshot: BinanceKlineSnapshot | None,
 ) -> LiveStructureOverlay:
-    stroke_prefix = _common_prefix(confirmed.strokes, live.strokes, _stroke_signature)
-    segment_prefix = _common_prefix(confirmed.segments, live.segments, _segment_signature)
+    """构造统一的候选尾部图层。
+
+    ``confirmed`` 中的 ``stable_strokes`` / ``segments`` 是正式账本；其后所有
+    笔与当前直接识别出的线段都只能作为候选。这样即便没有未收盘 K，已收盘
+    数据内部尚未提交的结构也不会被误画成实线。
+    """
+    stroke_prefix = _common_prefix(
+        confirmed.stable_strokes, live.strokes, _stroke_signature
+    )
+    segment_prefix = _common_prefix(
+        confirmed.segments, live.detected_segments, _segment_signature
+    )
 
     provisional_strokes: list[ProvisionalLine] = [
-        _stroke_as_line(x, "实时 K 触发的笔结构重算候选")
+        _stroke_as_line(x, "尚未进入 stable_strokes，后续 K 仍可能使其迁移或撤销")
         for x in live.strokes[stroke_prefix:]
     ]
     projection = _project_next_stroke(live)
@@ -157,8 +167,8 @@ def build_live_overlay(
         provisional_strokes.append(projection)
 
     provisional_segments: list[ProvisionalLine] = [
-        _segment_as_line(x, "实时 K 触发的线段结构重算候选")
-        for x in live.segments[segment_prefix:]
+        _segment_as_line(x, "已检测但尚未由下一线段推进为 COMMITTED")
+        for x in live.detected_segments[segment_prefix:]
     ]
     segment_projection = _project_next_segment(live, provisional_strokes)
     if segment_projection is not None and not _same_line_as_last(provisional_segments, segment_projection):

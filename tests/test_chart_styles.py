@@ -49,12 +49,15 @@ def test_custom_line_and_zone_styles_are_applied() -> None:
         and shape.fillcolor == color_with_opacity("#00AACC", 0.19)
         for shape in zone_shapes
     )
-    assert any(
-        shape.line.color == "#CC7700"
-        and shape.line.width == 1.1
-        and shape.fillcolor == color_with_opacity("#CC7700", 0.16)
-        for shape in zone_shapes
-    )
+    if result.segment_central_zones:
+        assert any(
+            shape.line.color == "#CC7700"
+            and shape.line.width == 1.1
+            and shape.fillcolor == color_with_opacity("#CC7700", 0.16)
+            for shape in zone_shapes
+        )
+    else:
+        assert not any(shape.line.color == "#CC7700" for shape in zone_shapes)
 
 
 def test_custom_fractal_and_trading_point_styles_are_applied() -> None:
@@ -125,3 +128,17 @@ def test_invalid_hover_opacity_is_rejected() -> None:
         assert "悬停背景不透明度" in str(exc)
     else:
         raise AssertionError("越界悬停背景不透明度应被拒绝")
+
+
+def test_static_chart_draws_only_stable_strokes_as_solid() -> None:
+    result = _real_result()
+    figure = build_raw_chart(result)
+    traces = {trace.name: trace for trace in figure.data}
+
+    assert len(traces["笔"].x) == len(result.stable_strokes) * 3
+    assert traces["笔"].line.dash is None
+    assert len(traces["未确认笔（同色虚线）"].x) == len(result.provisional_strokes) * 3
+    assert traces["未确认笔（同色虚线）"].line.dash == "dash"
+    assert len(traces["线段"].x) == len(result.segments) * 3
+    assert len(traces["未确认线段（同色虚线）"].x) == len(result.provisional_segments) * 3
+    assert traces["未确认线段（同色虚线）"].line.dash == "dash"
