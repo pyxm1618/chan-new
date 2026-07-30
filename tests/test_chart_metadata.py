@@ -13,7 +13,7 @@ def test_chart_has_complete_provenance() -> None:
         market="Binance 现货",
         source_url="https://example.test/klines",
     )
-    result = analyze_bars(demo_bars(30, symbol="BTCUSDT", interval="1h"), metadata=metadata)
+    result = analyze_bars(demo_bars(30, symbol="BTCUSDT", interval="1h"), metadata=metadata, left_boundary_anchored=True)
     figure = build_raw_chart(result)
     annotation_text = " ".join(x.text for x in figure.layout.annotations)
     assert "Binance 现货" in annotation_text
@@ -27,7 +27,7 @@ def test_chart_has_complete_provenance() -> None:
 
 
 def test_demo_chart_has_watermark() -> None:
-    result = analyze_bars(demo_bars(30), metadata=AnalysisMetadata.demo())
+    result = analyze_bars(demo_bars(30), metadata=AnalysisMetadata.demo(), left_boundary_anchored=True)
     figure = build_raw_chart(result)
     assert any("DEMO / 模拟数据" in x.text for x in figure.layout.annotations)
 
@@ -40,7 +40,7 @@ def test_default_segment_style_is_thinner() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars)
+    result = analyze_bars(bars, left_boundary_anchored=True)
     figure = build_raw_chart(result)
     trace = next(x for x in figure.data if x.name == "线段")
     assert trace.line.width == DEFAULT_CHART_STYLE.segment.width

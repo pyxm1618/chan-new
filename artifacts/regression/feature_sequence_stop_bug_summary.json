@@ -11,7 +11,7 @@
     "last_stroke_position": 337,
     "feature_tail_gap": 301
   },
-  "v0.10.5_fixed": {
+  "v0.10.5_continuous_scan_only": {
     "confirmed_strokes": 338,
     "confirmed_segments": 61,
     "feature_elements": 307,
@@ -21,10 +21,21 @@
     "last_stroke_position": 337,
     "feature_tail_gap": 0
   },
+  "v0.10.8_primary_reverse_confirmation_competition": {
+    "confirmed_strokes": 338,
+    "confirmed_segments": 57,
+    "feature_elements": 659,
+    "feature_fractals": 88,
+    "unfinished_segment_strokes": 6,
+    "feature_tail_position": 337,
+    "last_stroke_position": 337,
+    "feature_tail_gap": 0,
+    "endpoint_replacements": 27
+  },
   "validation": {
     "segment_validation_issues": 0,
     "reference_all_match": true,
-    "reference_segment_match_count": 61,
-    "reference_evidence_match_count": 61
+    "reference_segment_match_count": 57,
+    "reference_evidence_match_count": 57
   }
 }
