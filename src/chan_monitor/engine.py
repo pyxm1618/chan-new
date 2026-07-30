@@ -85,6 +85,7 @@ def analyze_bars(
         stroke_result.strokes,
         latest_bar=merged[-1] if merged else None,
         mode=segment_mode,
+        exclude_last_stroke_confirmation=True,
     )
     central_zone_result = detect_central_zones(stroke_result.strokes)
     segment_central_zone_result = detect_segment_central_zones(segment_result.segments)

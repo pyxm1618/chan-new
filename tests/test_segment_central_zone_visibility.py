@@ -5,7 +5,7 @@ def test_app_explains_missing_segment_central_zone() -> None:
     text = Path("app.py").read_text(encoding="utf-8")
     assert "线段中枢至少需要 3 条连续已确认线段" in text
     assert "无三段共同重叠" in text
-    assert 'APP_VERSION = "0.10.5"' in text
+    assert 'APP_VERSION = "0.10.8"' in text
 
 
 def test_chart_contains_segment_zone_status_annotation() -> None:
