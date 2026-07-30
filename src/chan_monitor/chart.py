@@ -230,7 +230,15 @@ def segments_frame(result: AnalysisResult) -> pd.DataFrame:
                 "终点价格": segment.end_value,
                 "内部笔数": segment.stroke_count,
                 "确认方式": evidence.confirmation if evidence else None,
-                "主特征分型有缺口": evidence.primary_fractal.gap if evidence else None,
+                "初始主特征分型有缺口": (
+                    (evidence.gap_origin_fractal or evidence.primary_fractal).gap
+                    if evidence else None
+                ),
+                "端点是否迁移": (
+                    evidence.end_position
+                    != (evidence.gap_origin_fractal or evidence.primary_fractal).endpoint_position
+                    if evidence else None
+                ),
                 "确认发生笔位置": evidence.confirmed_at_position if evidence else None,
                 "价差力度": segment.power,
                 "涨跌幅": segment.change,
@@ -259,6 +267,27 @@ def segment_evidence_frame(result: AnalysisResult) -> pd.DataFrame:
                 "主分型时间": item.primary_fractal.dt,
                 "主分型价格": item.primary_fractal.value,
                 "主分型有缺口": item.primary_fractal.gap,
+                "初始缺口端点位置": (
+                    item.gap_origin_fractal.endpoint_position
+                    if item.gap_origin_fractal else None
+                ),
+                "初始缺口端点时间": (
+                    item.gap_origin_fractal.dt if item.gap_origin_fractal else None
+                ),
+                "初始缺口端点价格": (
+                    item.gap_origin_fractal.value if item.gap_origin_fractal else None
+                ),
+                "最终线段端点位置": item.end_position,
+                "最终线段端点时间": (
+                    item.final_endpoint.dt if item.final_endpoint else None
+                ),
+                "最终线段端点价格": (
+                    item.final_endpoint.value if item.final_endpoint else None
+                ),
+                "端点发生迁移": (
+                    item.gap_origin_fractal is not None
+                    and item.end_position != item.gap_origin_fractal.endpoint_position
+                ),
                 "主分型真实突破": item.primary_fractal.actual_break,
                 "主分型突破状态": item.primary_fractal.break_status.label,
                 "主分型三元素": " / ".join(
@@ -965,7 +994,8 @@ def _add_segments(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> 
             _fmt(segment.source_start),
             _fmt(segment.source_end),
             evidence.confirmation if evidence else "未记录",
-            "是" if evidence and evidence.primary_fractal.gap else "否",
+            "是" if evidence and (evidence.gap_origin_fractal or evidence.primary_fractal).gap else "否",
+            "是" if evidence and evidence.gap_origin_fractal and evidence.end_position != evidence.gap_origin_fractal.endpoint_position else "否",
         ]
         xs.extend([segment.start_dt, segment.end_dt, None])
         ys.extend([segment.start_value, segment.end_value, None])
@@ -993,7 +1023,8 @@ def _add_segments(fig: go.Figure, result: AnalysisResult, style: ChartStyle) -> 
                 "%{x}<br>端点价格 %{y}<br>内部笔数 %{customdata[2]}<br>"
                 "价差 %{customdata[3]}<br>涨跌幅 %{customdata[4]}<br>"
                 "原始范围 %{customdata[5]} ~ %{customdata[6]}<br>"
-                "确认方式 %{customdata[7]}<br>主特征分型缺口 %{customdata[8]}<extra></extra>"
+                "确认方式 %{customdata[7]}<br>初始主特征分型缺口 %{customdata[8]}<br>"
+                "等待期端点迁移 %{customdata[9]}<extra></extra>"
             ),
             name="线段",
         ),

@@ -55,7 +55,7 @@ from chan_monitor.segments import SegmentMode, validate_segment_chain
 from chan_monitor.strokes import validate_stroke_chain
 
 
-APP_VERSION = "0.10.5"
+APP_VERSION = "0.10.8"
 
 
 STYLE_WIDGET_KEYS = (
@@ -820,8 +820,10 @@ with segment_tab:
     st.subheader("标准特征序列线段数据验证")
     st.caption(
         "向上线段只取向下笔组成特征序列并寻找顶分型；向下线段只取向上笔组成特征序列并寻找底分型。"
-        "第一、二特征元素无缺口时直接确认；有缺口时必须等待从候选端点开始的反向特征序列分型。"
-        "所有已确认线段至少三笔、包含奇数笔，且首三笔存在共同重叠区。"
+        "第一、二特征元素无缺口时直接确认；有缺口时必须等待从候选端点开始的反向特征序列分型，"
+        "等待期间若出现更极端的合法端点会迁移并重启反向确认。"
+        "首段会扫描所有可能起点，并额外校验向上段的最低底/最高顶、向下段的最高顶/最低底；"
+        "终点最早的完整候选优先，候选起点之前的笔进入窗口前缀未解析区。"
     )
     feature_tail_position = max(
         (
@@ -843,11 +845,29 @@ with segment_tab:
     fc3.metric("扫描至笔位置", f"{feature_tail_position} / {last_stroke_position}")
     fc4.metric("尾部未扫描笔数", feature_tail_gap)
 
+    first_evidence = result.segment_evidence[0] if result.segment_evidence else None
+    boundary_violations = sum(
+        item.code == "FIRST_SEGMENT_EXTREME_VIOLATION"
+        for item in result.segment_diagnostics
+    )
+    bc1, bc2, bc3, bc4 = st.columns(4)
+    bc1.metric(
+        "首段起点笔位置",
+        first_evidence.start_position if first_evidence is not None else "—",
+    )
+    bc2.metric(
+        "首段终点笔位置",
+        first_evidence.end_position if first_evidence is not None else "—",
+    )
+    bc3.metric("窗口前缀未解析笔", len(result.unresolved_segment_prefix_strokes))
+    bc4.metric("已排除极值违规候选", boundary_violations)
+
     segment_issues = validate_segment_chain(
         result.segments,
         result.strokes,
         mode=result.segment_mode,
         evidence=result.segment_evidence,
+        exclude_last_stroke_confirmation=True,
     )
     if segment_issues:
         st.error("线段数据层校验失败，应停止绘图并检查下表。")

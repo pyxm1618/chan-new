@@ -69,6 +69,22 @@ class AnalysisResult:
 
 
 
+def _stable_stroke_prefix(strokes: tuple[Stroke, ...]) -> tuple[Stroke, ...]:
+    """返回不会因为下一根K线导致结构级联回撤的笔前缀。
+
+    CZSC实时分析中，最后一笔始终处于确认窗口：
+    - 它可能因为新的分型替换而撤销；
+    - 任何依赖它的线段/中枢都不能成为正式结构。
+
+    因此：
+    - strokes 保留完整链，用于UI显示和诊断；
+    - stable_strokes 只用于线段、中枢、交易点等正式结构。
+    """
+    if len(strokes) <= 1:
+        return ()
+    return tuple(strokes[:-1])
+
+
 def analyze_bars(
     raw_bars: Iterable[RawBar],
     *,
@@ -81,25 +97,35 @@ def analyze_bars(
     merged, merge_count = remove_inclusions(bars)
     fractals, diagnostics = detect_fractals(merged, czsc_compatibility=czsc_compatibility)
     stroke_result = detect_strokes(bars, min_bi_len=min_bi_len)
+
+    # 结构稳定性边界：最新一笔属于可回撤尾部。
+    # 任何需要“正式结构”的模块都不能消费它，否则会出现：
+    # 1. 已确认线段下一根K线消失；
+    # 2. 笔中枢由末笔构成后整体撤销；
+    # 3. 线段中枢右边界回缩。
+    # 保留全部 strokes 供诊断和展示，稳定结构只使用 stable_strokes。
+    stable_strokes = _stable_stroke_prefix(stroke_result.strokes)
+
     segment_result = detect_segments(
-        stroke_result.strokes,
+        stable_strokes,
         latest_bar=merged[-1] if merged else None,
         mode=segment_mode,
+        exclude_last_stroke_confirmation=True,
     )
-    central_zone_result = detect_central_zones(stroke_result.strokes)
+    central_zone_result = detect_central_zones(stable_strokes)
     segment_central_zone_result = detect_segment_central_zones(segment_result.segments)
     trading_point_result = detect_trading_points(
         segment_result.segments,
         segment_central_zone_result.zones,
         raw_bars=bars,
         segment_evidence=segment_result.evidence,
-        strokes=stroke_result.strokes,
+        strokes=stable_strokes,
     )
     return AnalysisResult(
         raw_bars=bars,
         merged_bars=tuple(merged),
         fractals=tuple(fractals),
-        strokes=stroke_result.strokes,
+        strokes=stable_strokes,
         unfinished_bars=stroke_result.unfinished_bars,
         segments=segment_result.segments,
         segment_markers=segment_result.markers,
