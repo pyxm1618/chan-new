@@ -437,7 +437,13 @@ class FeatureFractal:
 
 @dataclass(frozen=True, slots=True)
 class SegmentEvidence:
-    """一条已确认线段的数据层确认依据。"""
+    """一条已确认线段的数据层确认依据。
+
+    ``gap_origin_fractal`` 记录进入“有缺口等待反向确认”状态时的首个主
+    特征分型。等待期间端点可能被后续更高顶或更低底迁移；当最终极值尚未
+    形成新的完整主特征分型时，``primary_fractal`` 仍保留最近可审计的主
+    分型，``final_endpoint`` 则明确记录线段实际采用的最终端点。
+    """
 
     segment_index: int
     start_position: int
@@ -445,6 +451,8 @@ class SegmentEvidence:
     confirmation: str
     primary_fractal: FeatureFractal
     reverse_fractal: FeatureFractal | None = None
+    gap_origin_fractal: FeatureFractal | None = None
+    final_endpoint: Fractal | None = None
 
     @property
     def confirmed_at_position(self) -> int:

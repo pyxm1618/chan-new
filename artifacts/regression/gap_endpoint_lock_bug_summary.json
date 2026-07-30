@@ -1,0 +1,95 @@
+{
+  "dataset": "DEMO / deterministic 5m regression; not real market data",
+  "root_cause": "after a gapped primary feature fractal, the old implementation froze the endpoint and fed only the reverse detector",
+  "old_confirmed_segments": 61,
+  "fixed_confirmed_segments": 58,
+  "migrated_segment_count": 9,
+  "migrations": [
+    {
+      "segment_index": 1,
+      "start_position": 4,
+      "gap_origin_position": 7,
+      "final_endpoint_position": 11,
+      "confirmed_at_position": 13,
+      "gap_origin_price": 90.02383139102206,
+      "final_endpoint_price": 89.32242699416904
+    },
+    {
+      "segment_index": 3,
+      "start_position": 18,
+      "gap_origin_position": 21,
+      "final_endpoint_position": 25,
+      "confirmed_at_position": 27,
+      "gap_origin_price": 88.6365448331546,
+      "final_endpoint_price": 87.98510805198188
+    },
+    {
+      "segment_index": 17,
+      "start_position": 104,
+      "gap_origin_position": 107,
+      "final_endpoint_position": 115,
+      "confirmed_at_position": 119,
+      "gap_origin_price": 88.46300700071127,
+      "final_endpoint_price": 87.59925675269392
+    },
+    {
+      "segment_index": 18,
+      "start_position": 115,
+      "gap_origin_position": 120,
+      "final_endpoint_position": 128,
+      "confirmed_at_position": 130,
+      "gap_origin_price": 112.08794609929859,
+      "final_endpoint_price": 112.85866737381562
+    },
+    {
+      "segment_index": 34,
+      "start_position": 201,
+      "gap_origin_position": 204,
+      "final_endpoint_position": 210,
+      "confirmed_at_position": 212,
+      "gap_origin_price": 110.54003910558671,
+      "final_endpoint_price": 111.99146658364309
+    },
+    {
+      "segment_index": 35,
+      "start_position": 210,
+      "gap_origin_position": 213,
+      "final_endpoint_position": 221,
+      "confirmed_at_position": 223,
+      "gap_origin_price": 87.7490295629529,
+      "final_endpoint_price": 87.50767090244233
+    },
+    {
+      "segment_index": 48,
+      "start_position": 277,
+      "gap_origin_position": 280,
+      "final_endpoint_position": 284,
+      "confirmed_at_position": 286,
+      "gap_origin_price": 109.09600864281691,
+      "final_endpoint_price": 110.28329339729986
+    },
+    {
+      "segment_index": 51,
+      "start_position": 290,
+      "gap_origin_position": 293,
+      "final_endpoint_position": 297,
+      "confirmed_at_position": 299,
+      "gap_origin_price": 89.59522796657207,
+      "final_endpoint_price": 88.70377354979387
+    },
+    {
+      "segment_index": 52,
+      "start_position": 297,
+      "gap_origin_position": 300,
+      "final_endpoint_position": 304,
+      "confirmed_at_position": 310,
+      "gap_origin_price": 111.5349572358613,
+      "final_endpoint_price": 111.5810951189811
+    }
+  ],
+  "validation": {
+    "segment_validation_issues": 0,
+    "reference_all_match": true,
+    "gap_endpoint_invariant_issues": 0
+  }
+}

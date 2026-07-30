@@ -187,9 +187,9 @@ def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministicall
     assert len(first.merged_bars) == 3721
     assert len(first.fractals) == 851
     assert len(first.strokes) == 338
-    assert len(first.segments) == 61
-    assert len(first.feature_elements) == 307
-    assert len(first.feature_fractals) == 63
+    assert len(first.segments) == 58
+    assert len(first.feature_elements) == 660
+    assert len(first.feature_fractals) == 88
     assert len(first.unfinished_segment_strokes) == 3
     assert max(
         position

@@ -4,6 +4,9 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import random
 
+import pytest
+
+import chan_monitor.segments as segment_module
 from chan_monitor.data import bars_from_csv, demo_bars
 from chan_monitor.engine import FractalEngine, analyze_bars
 from chan_monitor.feature_sequence_reference import (
@@ -19,7 +22,12 @@ from chan_monitor.models import (
     Stroke,
     StrokeDirection,
 )
-from chan_monitor.segments import SegmentMode, detect_segments, validate_segment_chain
+from chan_monitor.segments import (
+    SegmentMode,
+    detect_segments,
+    stroke_endpoints,
+    validate_segment_chain,
+)
 
 
 def _fractal(index: int, mark: FractalMark, value: float) -> Fractal:
@@ -85,6 +93,146 @@ def _signature(result) -> tuple:
         (x.direction, x.fx_a.dt, x.fx_b.dt, x.stroke_count)
         for x in result.segments
     )
+
+
+def test_first_segment_skips_invalid_window_prefix() -> None:
+    result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
+
+    first = result.segment_evidence[0]
+    assert first.start_position == 1
+    assert first.end_position == 4
+
+    segment = result.segments[0]
+    assert segment.direction is StrokeDirection.UP
+    assert segment.start_value == pytest.approx(90.2114, abs=1e-4)
+    assert segment.end_value == pytest.approx(110.1656, abs=1e-4)
+
+    assert len(result.unresolved_segment_prefix_strokes) == 1
+    assert any(
+        item.code == "FIRST_SEGMENT_EXTREME_VIOLATION"
+        for item in result.segment_diagnostics
+    )
+
+
+def test_first_segment_extreme_guard_rejects_internal_boundary_breaks() -> None:
+    up_with_lower_bottom = _stroke_chain([10, 20, 9, 25])
+    up_with_higher_top = _stroke_chain([10, 25, 12, 20])
+    down_with_higher_top = _stroke_chain([80, 110, 90, 115, 85])
+    down_with_lower_bottom = _stroke_chain([80, 110, 80, 100, 85])
+
+    assert not segment_module._first_segment_extremes_valid(
+        up_with_lower_bottom,
+        stroke_endpoints(up_with_lower_bottom),
+        0,
+        3,
+    )
+    assert not segment_module._first_segment_extremes_valid(
+        up_with_higher_top,
+        stroke_endpoints(up_with_higher_top),
+        0,
+        3,
+    )
+    assert not segment_module._first_segment_extremes_valid(
+        down_with_higher_top,
+        stroke_endpoints(down_with_higher_top),
+        1,
+        4,
+    )
+    assert not segment_module._first_segment_extremes_valid(
+        down_with_lower_bottom,
+        stroke_endpoints(down_with_lower_bottom),
+        1,
+        4,
+    )
+
+
+def test_rejected_complete_first_candidate_cannot_return_from_fallback(monkeypatch) -> None:
+    strokes = _stroke_chain([10, 20, 15, 25, 18, 23, 14])
+    endpoints = stroke_endpoints(strokes)
+
+    def fake_scan(values, points, start):
+        del points
+        end = min(start + 3, len(values) - 1)
+        return segment_module._ScanOutcome(
+            start,
+            end,
+            None,
+            None,
+            "NO_GAP",
+            end,
+            [],
+            [],
+            [],
+        )
+
+    monkeypatch.setattr(segment_module, "_first_three_overlap", lambda *_: True)
+    monkeypatch.setattr(segment_module, "_scan_segment", fake_scan)
+    monkeypatch.setattr(
+        segment_module,
+        "_first_segment_extremes_valid",
+        lambda *_: False,
+    )
+
+    outcome = segment_module._choose_first_segment(strokes, endpoints)
+    assert outcome.end_position is None
+    assert outcome.primary is None
+
+
+def test_same_endpoint_same_price_prefers_later_first_start(monkeypatch) -> None:
+    strokes = _stroke_chain([80, 110, 90, 110, 95, 100, 85, 99])
+    endpoints = stroke_endpoints(strokes)
+
+    def fake_scan(values, points, start):
+        del values, points
+        if start in (1, 3):
+            return segment_module._ScanOutcome(
+                start,
+                6,
+                None,
+                None,
+                "NO_GAP",
+                7,
+                [],
+                [],
+                [],
+            )
+        return segment_module._ScanOutcome(
+            start,
+            None,
+            None,
+            None,
+            None,
+            None,
+            [],
+            [],
+            [],
+        )
+
+    monkeypatch.setattr(segment_module, "_first_three_overlap", lambda *_: True)
+    monkeypatch.setattr(segment_module, "_scan_segment", fake_scan)
+
+    outcome = segment_module._choose_first_segment(strokes, endpoints)
+    assert outcome.start_position == 3
+    assert outcome.end_position == 6
+
+
+def test_truncated_stroke_windows_recover_the_same_confirmed_tail() -> None:
+    complete = analyze_bars(demo_bars(600, symbol="BTCUSDT", interval="5m"))
+    complete_signature = _signature(complete)
+    end_to_index = {
+        segment.fx_b.dt: index
+        for index, segment in enumerate(complete.segments)
+    }
+
+    for offset in range(20):
+        truncated = detect_segments(complete.strokes[offset:])
+        assert truncated.segments
+        first_end = truncated.segments[0].fx_b.dt
+        assert first_end in end_to_index
+        complete_index = end_to_index[first_end]
+        assert _signature(truncated)[1:] == complete_signature[
+            complete_index + 1 : complete_index + len(truncated.segments)
+        ]
 
 
 def test_no_gap_feature_fractal_confirms_segment_directly() -> None:
@@ -208,9 +356,9 @@ def test_real_snapshot_matches_independent_feature_sequence_reference() -> None:
     )
 
     assert len(result.strokes) == 26
-    assert len(result.segments) == 4
-    assert [x.stroke_count for x in result.segments] == [5, 5, 3, 5]
-    assert len(result.unresolved_segment_prefix_strokes) == 1
+    assert len(result.segments) == 3
+    assert [x.stroke_count for x in result.segments] == [3, 9, 5]
+    assert len(result.unresolved_segment_prefix_strokes) == 2
     assert len(result.unfinished_segment_strokes) == 7
     assert comparison.all_match
     assert validate_segment_chain(
@@ -236,17 +384,10 @@ def test_false_actual_break_is_rejected_then_scanning_continues() -> None:
     result = analyze_bars(demo_bars(600, symbol="BTCUSDT", interval="5m"))
 
     assert len(result.strokes) == 37
-    assert len(result.segments) == 4
-    assert len(result.feature_elements) == 36
+    assert len(result.segments) == 5
+    assert len(result.feature_elements) == 63
+    assert len(result.feature_fractals) == 9
     assert len(result.unfinished_segment_strokes) == 3
-    assert any(
-        x.code == "FEATURE_FRACTAL_REJECTED_NO_ACTUAL_BREAK"
-        for x in result.segment_diagnostics
-    )
-    assert any(
-        x.break_status is FeatureBreakStatus.REJECTED
-        for x in result.feature_fractals
-    )
     assert max(
         position
         for element in result.feature_elements
@@ -279,9 +420,9 @@ def test_5000_bar_feature_sequence_reaches_tail_and_matches_reference() -> None:
     )
 
     assert len(result.strokes) == 338
-    assert len(result.segments) == 61
-    assert len(result.feature_elements) == 307
-    assert len(result.feature_fractals) == 63
+    assert len(result.segments) == 58
+    assert len(result.feature_elements) == 660
+    assert len(result.feature_fractals) == 88
     assert len(result.unfinished_segment_strokes) == 3
     assert max(
         position
@@ -295,6 +436,138 @@ def test_5000_bar_feature_sequence_reaches_tail_and_matches_reference() -> None:
         evidence=result.segment_evidence,
     ) == ()
 
+
+
+def test_gap_waiting_still_migrates_extremes_until_a_later_no_gap_primary_wins() -> None:
+    """缺口等待中端点可迁移，但后续无缺口主分型必须优先直接确认。"""
+    result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
+    from chan_monitor.segments import _scan_segment, stroke_endpoints
+
+    outcome = _scan_segment(result.strokes, stroke_endpoints(result.strokes), 303)
+
+    assert outcome.gap_origin is not None
+    assert outcome.gap_origin.endpoint_position == 308
+    assert outcome.end_position == 318
+    assert outcome.confirmation == "NO_GAP"
+    assert outcome.confirmed_at_position == 324
+    assert outcome.final_endpoint is not None
+    assert outcome.final_endpoint.value == result.strokes[318].fx_a.value
+    replacements = [
+        item for item in outcome.diagnostics
+        if item.code == "GAP_PRIMARY_ENDPOINT_REPLACED"
+    ]
+    assert len(replacements) == 3
+    assert "第 312 笔" in replacements[0].message
+    assert any(
+        item.code == "GAP_WAIT_CONFIRMED_BY_LATER_NO_GAP_PRIMARY"
+        for item in outcome.diagnostics
+    )
+
+
+def test_gap_wait_does_not_ignore_later_confirmed_no_gap_primary() -> None:
+    """回归：18→21 缺口等待后，25 在 27 形成无缺口主分型，应立即结束。"""
+    result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
+    from chan_monitor.segments import _scan_segment, stroke_endpoints
+
+    outcome = _scan_segment(result.strokes, stroke_endpoints(result.strokes), 18)
+
+    assert outcome.gap_origin is not None
+    assert outcome.gap_origin.endpoint_position == 21
+    assert outcome.gap_origin.gap is True
+    assert outcome.end_position == 25
+    assert outcome.confirmation == "NO_GAP"
+    assert outcome.confirmed_at_position == 27
+    assert outcome.primary is not None
+    assert outcome.primary.endpoint_position == 25
+    assert outcome.primary.gap is False
+    assert outcome.reverse is None
+    assert any(
+        item.code == "GAP_WAIT_CONFIRMED_BY_LATER_NO_GAP_PRIMARY"
+        for item in outcome.diagnostics
+    )
+
+
+def test_gap_confirmation_guard_detects_skipped_earlier_no_gap_primary() -> None:
+    """独立不变量必须能识别旧版 18→31 的错误缺口确认。"""
+    result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
+    from chan_monitor.models import FeatureBreakStatus, SegmentEvidence
+    from chan_monitor.segments import (
+        _start_reverse_attempt,
+        _trace_feature_detector,
+        _validate_gap_wait_did_not_skip_no_gap_primary,
+    )
+
+    direction = result.strokes[18].direction
+    trace = _trace_feature_detector(
+        result.strokes,
+        segment_direction=direction,
+        sequence_start_position=18,
+        feed_start=19,
+    )
+    confirmed = [
+        fx for fx in trace.candidates
+        if fx.break_status is FeatureBreakStatus.CONFIRMED
+    ]
+    origin = next(fx for fx in confirmed if fx.endpoint_position == 21)
+    stale_primary = next(fx for fx in confirmed if fx.endpoint_position == 31)
+    reverse = _start_reverse_attempt(
+        result.strokes,
+        direction,
+        endpoint_position=31,
+        active_from=31,
+    ).confirmed
+    assert reverse is not None
+    bad = SegmentEvidence(
+        segment_index=0,
+        start_position=18,
+        end_position=31,
+        confirmation="GAP_REVERSE_FRACTAL",
+        primary_fractal=stale_primary,
+        reverse_fractal=reverse,
+        gap_origin_fractal=origin,
+        final_endpoint=result.strokes[31].fx_a,
+    )
+
+    issues = _validate_gap_wait_did_not_skip_no_gap_primary(
+        strokes=result.strokes,
+        evidence=bad,
+        segment_index=0,
+    )
+    assert len(issues) == 1
+    assert issues[0].code == "GAP_CONFIRMATION_SKIPPED_EARLIER_NO_GAP_PRIMARY"
+    assert "第 25 笔" in issues[0].message
+    assert "第 27 笔" in issues[0].message
+
+
+def test_every_confirmed_gap_segment_uses_last_extreme_before_reverse_confirmation() -> None:
+    result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
+    for item in result.segment_evidence:
+        if item.confirmation != "GAP_REVERSE_FRACTAL":
+            continue
+        origin = item.gap_origin_fractal or item.primary_fractal
+        final = item.final_endpoint or result.strokes[item.end_position].fx_a
+        direction = result.strokes[item.start_position].direction
+        expected_direction = (
+            StrokeDirection.DOWN
+            if direction is StrokeDirection.UP
+            else StrokeDirection.UP
+        )
+        candidates = [
+            (position, result.strokes[position].fx_a)
+            for position in range(origin.endpoint_position, item.confirmed_at_position + 1)
+            if position < len(result.strokes)
+            and result.strokes[position].direction is expected_direction
+        ]
+        if direction is StrokeDirection.UP:
+            expected_position, expected = max(
+                candidates, key=lambda x: (x[1].value, x[0])
+            )
+        else:
+            expected_position, expected = min(
+                candidates, key=lambda x: (x[1].value, -x[0])
+            )
+        assert item.end_position == expected_position
+        assert final.value == expected.value
 
 def test_confirmed_segment_prefixes_are_stable_as_more_strokes_arrive() -> None:
     full_result = analyze_bars(demo_bars(5000, symbol="BTCUSDT", interval="5m"))
