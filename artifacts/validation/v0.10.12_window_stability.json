@@ -1,0 +1,19 @@
+{
+  "bars_scanned": 5000,
+  "trusted_origin_reference": {
+    "strokes": 338,
+    "formal_segments": 56,
+    "formal_central_zones": 46,
+    "formal_segment_central_zones": 1
+  },
+  "unanchored_windows_checked": 19,
+  "anchored_windows_checked": 20,
+  "anchored_windows_with_formal_zones": 14,
+  "missing_anchor_checks": 1,
+  "raw_window_stride": 250,
+  "minimum_window_bars": 500,
+  "anchor_context_bars": 750,
+  "max_anchor_windows": 20,
+  "failure_count": 0,
+  "failures": []
+}

@@ -182,15 +182,15 @@ def test_independent_reference_matches_deterministic_cases() -> None:
 
 def test_engine_batch_and_incremental_trading_points_match() -> None:
     bars = bars_from_csv(Path("artifacts/real/BTCUSDT_spot_1h_20191014-0600_20191104-0100_bars.csv"), symbol="BTCUSDT", interval="1h")[:220]
-    batch = analyze_bars(bars)
-    engine = FractalEngine()
+    batch = analyze_bars(bars, left_boundary_anchored=True)
+    engine = FractalEngine(left_boundary_anchored=True)
     incremental = engine.extend(bars)
     assert [(x.point_type, x.dt, x.price, x.confirmed_at_dt) for x in batch.trading_points] == [(x.point_type, x.dt, x.price, x.confirmed_at_dt) for x in incremental.trading_points]
 
 
 def test_real_snapshot_reference_and_chart_layer() -> None:
     bars = bars_from_csv(Path("artifacts/real/BTCUSDT_spot_1h_20191014-0600_20191104-0100_bars.csv"), symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars)
+    result = analyze_bars(bars, left_boundary_anchored=True)
     comparison = compare_trading_points_with_reference(result.trading_points, result.segments, result.segment_central_zones, raw_bars=result.raw_bars)
     assert comparison.all_match
     assert not validate_trading_points(result.trading_points, result.segments, result.segment_central_zones, raw_bars=result.raw_bars)

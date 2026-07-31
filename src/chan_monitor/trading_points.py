@@ -697,6 +697,8 @@ def _segment_confirmation_dt(
     strokes: Sequence[Stroke],
 ) -> datetime:
     evidence = evidence_map.get(segment_index)
+    if evidence is not None and evidence.committed_at is not None:
+        return evidence.committed_at
     if evidence is not None and 0 <= evidence.confirmed_at_position < len(strokes):
         return strokes[evidence.confirmed_at_position].end_dt
     segment = next(x for x in segments if x.index == segment_index)

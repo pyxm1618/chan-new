@@ -1,44 +1,243 @@
-# CZSC 结构监控项目 · 5000 根实时数据版 v0.10.5
+# CZSC 结构监控项目 · 5000 根实时数据版 v0.10.12
 
-## v0.10.5 标准特征序列连续扫描修复
+## v0.10.12 正式线段校验语义与真实提交时间
 
-本版本修复了一个会让线段识别在历史中途永久停止的严重问题。旧逻辑遇到
-“已经形成特征分型形态、但后续没有真实突破”的候选时直接结束扫描；正确
-行为应当区分：
+v0.10.11 已完成左右边界隔离，但还存在两个审计问题：
 
-- **已确认**：已经发生真实突破，可以继续判断线段终点；
-- **待后续验证**：候选位于当前数据尾部，证据不足，只保留为未确认结构；
-- **已否定**：后续数据已经充分证明没有真实突破，重置特征序列并继续向后扫描。
+1. 页面把 `resolved_strokes` 的最后一笔继续当作可回撤笔，导致正式线段被
+   `SEGMENT_CONFIRMATION_USES_REVERSIBLE_LAST_STROKE` 误报；
+2. `SegmentEvidence` 只有特征序列确认笔位置，没有线段真正进入正式账本的
+   时间，回测和通知可能把信号时间提前到结构证据时间。
 
-生产实现和独立参考实现均改为三状态模型，并新增独立的尾部覆盖不变量。
-只要特征序列停止位置距离笔链尾部超过两笔，验证会直接报
-`FEATURE_SEQUENCE_TAIL_NOT_SCANNED`，不再允许两个同样有缺陷的实现“错误地一致”。
-
-同一批 5000 根确定性 5m 回归数据修复前后：
+v0.10.12 明确区分两种校验对象：
 
 ```text
-                         v0.10.4       v0.10.5
-已确认笔                    338            338
-已确认线段                    3             61
-特征元素                     35            307
-特征分型                      5             63
-未完成线段区域              317              3
-特征序列扫描到的笔位置       36            337
-笔链最后位置                337            337
+DETECTED   直接检测结果：必须与同一批笔全量重算完全一致
+COMMITTED  正式提交账本：必须是从真实锚点重算结果的连续前缀
 ```
 
-修复没有修改笔数据；变化来自线段状态机终于在被否定的伪分型后继续扫描。
+正式账本校验现在使用完整 `all_strokes`，并显式传入
+`stable_stroke_count`。稳定前缀最后一笔不再被机械判定为可回撤笔，真正位于
+稳定边界之外的确认依据仍会被拒绝。
 
-当前主流程：
+每条正式线段的 `SegmentEvidence` 新增：
+
+```python
+committed_at: datetime
+committed_at_bar_position: int
+```
+
+其中 `committed_at` 是状态机实际把线段追加进 `segments` 正式账本时，当前
+原始 K 的收盘时间。交易点的可通知时间优先使用该字段，不再使用线段端点时间
+或特征序列确认笔的结构时间。
+
+验证命令：
+
+```bash
+PYTHONPATH=src pytest
+PYTHONPATH=src python scripts/validate_segment_commits.py --bars 5000
+```
+
+验证结果：
 
 ```text
-Binance 5000 根已收盘 K + 1 根当前未收盘 K
-→ 去包含 → 分型 → 笔
-→ 标准特征序列线段
-→ 笔中枢 / 线段中枢
-→ 线段级 B1/B2/B3 与 S1/S2/S3
-→ 已确认结构实线 + 未确认尾部同色虚线
+106 passed, 1 skipped
+5000 根、56 条正式线段：校验误报 0
+缺失 committed_at：0
+提交时间/提交 K 位置逆序：0
+提交时间与逐根首次出现时间不一致：0
 ```
+
+## v0.10.11 左边界锚定：根治“窗口首段错位”
+
+v0.10.10 已经解决右侧新 K 导致正式结构回撤，但有限历史窗口仍存在另一类问题：
+程序无法仅凭窗口内部数据证明第一条线段的绝对相位。任意把历史从中间裁开，
+都可能得到一个几何上自洽、但相对完整历史起点错误的首段；笔中枢和线段中枢
+会继续继承这个错误。
+
+v0.10.11 改为**默认安全关闭（fail closed）**：
+
+```text
+没有真实历史起点声明，也没有持久化结构锚点
+    -> all_strokes / detected_segments 继续计算并展示
+    -> 全部检测线段进入 unresolved_prefix_segments 候选层
+    -> segments / central_zones / segment_central_zones / trading_points 为空
+```
+
+这不是“少算一条首段”，而是承认有限窗口本身无法恢复绝对线段相位。正式结构
+只有在以下两种情况下才允许输出：
+
+1. 调用方能证明输入从真实历史起点开始，显式传入 `left_boundary_anchored=True`；
+2. 调用方从持久化历史加载一个已经确认的线段端点 `StructureAnchor`。
+
+### API 示例
+
+真实历史起点：
+
+```python
+result = analyze_bars(
+    bars,
+    left_boundary_anchored=True,
+)
+```
+
+普通最近 N 根窗口：
+
+```python
+result = analyze_bars(bars)
+assert result.segments == ()
+assert result.unresolved_prefix_segments == result.detected_segments
+```
+
+从持久化线段端点继续：
+
+```python
+from chan_monitor import StructureAnchor, analyze_bars
+
+anchor = StructureAnchor(
+    dt=last_committed_segment.end_dt,
+    value=last_committed_segment.end_value,
+    mark=last_committed_segment.fx_b.mark,
+)
+result = analyze_bars(recent_bars, left_anchor=anchor)
+```
+
+`StructureAnchor` 必须能在当前笔链端点中精确匹配。找不到时不会猜测替代起点，
+而是继续保持正式结构为空。端点锚点只恢复线段相位；由于当前版本没有持久化
+“进行中的中枢”状态，锚点之后的第一个笔中枢分组和第一个线段中枢仍会保守地
+留在候选层，避免把跨窗口中枢误报为正式中枢。
+
+### 四层结构语义
+
+```text
+all_strokes             当前完整笔链，可能包含右侧可回撤尾部
+stable_strokes          仅解决右边界回撤的封存前缀
+resolved_strokes        同时通过右侧稳定性与左侧锚定的正式笔序列
+provisional_strokes     右侧仍可迁移或撤销的尾部
+
+detected_segments       当前窗口直接识别结果，仅作候选/审计
+unresolved_prefix_segments  左边界未解析的候选线段
+segments                有可信左锚点且通过右侧两阶段提交的正式线段
+provisional_segments    左边界已解析后的右侧候选尾段
+```
+
+Streamlit 页面新增“确认数据从真实历史起点开始”开关，默认关闭。Binance 最近
+5000 根、任意 CSV 截断窗口默认都不会发布正式线段/中枢/买卖点；只有用户明确
+确认数据起点可信时才启用正式层。生产系统更推荐传入持久化 `StructureAnchor`。
+
+### 验证
+
+```bash
+PYTHONPATH=src pytest
+PYTHONPATH=src python scripts/validate_structure_stability.py --bars 5000
+PYTHONPATH=src python scripts/validate_window_stability.py --bars 5000
+```
+
+验证结果：
+
+```text
+完整测试：101 passed, 1 skipped
+右边界逐根扫描：5000 根，候选笔回撤 175 次，正式层异常 0
+左边界窗口扫描：19 个无锚点窗口，错误正式输出 0
+持久化锚点扫描：20 个窗口，线段后缀/中枢子序列错误 0
+锚点已被裁掉：1 个窗口，正确 fail closed
+```
+
+## 历史：v0.10.10 稳定结构状态机（只解决右边界回撤）
+
+v0.10.9-fixed 采用 `strokes[:-1]` 隔离最后一笔，只能把反例向后推迟，
+不能证明剩余笔是稳定前缀。v0.10.10 删除了固定尾部窗口，改为显式维护
+结构状态与只追加的正式账本。
+
+### 结构分层
+
+```text
+detected_strokes     原始笔状态机当前直接输出，允许级联回退，仅用于审计
+all_strokes          当前接受的完整笔链 = stable_strokes + provisional_strokes
+stable_strokes       已被后续结构确认事件封存，只增不减
+provisional_strokes  仍可能迁移、替换或撤销的连续尾部
+
+detected_segments    当前完整笔链上的直接线段识别结果，允许尾部变化
+segments             COMMITTED 正式线段，只追加
+provisional_segments 已识别但尚未提交的尾部线段
+```
+
+正式线段采用两阶段提交：
+
+```text
+DETECTED
+   │ 后续又识别出一条线段
+   ▼
+COMMITTED
+```
+
+也就是当前最后一条已检测线段始终保留为候选；只有下一条线段出现后，前一条
+线段及其确认所依赖的笔前缀才进入正式账本。这里没有 `[:-1]`、`[:-2]` 或
+任何固定安全距离。
+
+### 下游消费规则
+
+```text
+正式笔中枢       <- stable_strokes
+候选笔中枢       <- all_strokes
+正式线段中枢     <- segments
+候选线段中枢     <- detected_segments
+正式买卖点       <- stable_strokes + segments + 正式中枢
+```
+
+图表也按同一语义绘制：稳定笔和正式线段为实线；`provisional_strokes` 与
+`provisional_segments` 为同色虚线。即使所有 K 都已收盘，尚未提交的结构尾部
+也不会再冒充正式结构。
+
+### 逐根前缀验证
+
+项目新增 `StructureState` 和：
+
+```bash
+PYTHONPATH=src python scripts/validate_structure_stability.py --bars 5000
+```
+
+同一批确定性 DEMO 数据的结果：
+
+```text
+扫描原始 K：5000
+原始笔状态机候选回退：175 次（允许，只发生在 provisional 层）
+最终 detected_strokes：338
+最终 all_strokes：338
+最终 stable_strokes：330
+最终 provisional_strokes：8
+最终正式线段：56
+最终候选线段：1
+
+稳定笔前缀回撤：0
+正式线段回撤：0
+正式笔中枢消失：0
+正式笔中枢右边界缩回：0
+正式线段中枢消失：0
+正式线段中枢右边界缩回：0
+```
+
+专项回归覆盖：
+
+```text
+125 -> 126
+175 -> 176
+235 -> 236
+378 -> 379
+403 -> 404
+633 -> 634
+810 -> 811
+990 -> 991
+```
+
+这些位置允许 `detected_strokes`、候选线段和候选中枢变化，但要求：
+
+```python
+previous_stable_strokes == current_stable_strokes[:len(previous_stable_strokes)]
+previous_confirmed_segments == current_confirmed_segments[:len(previous_confirmed_segments)]
+```
+
+两项断言在 1000 / 5000 根逐根扫描中均为零异常。
 
 ## 本版本完成的内容
 
@@ -110,7 +309,7 @@ UI 使用 **增量 REST 轮询**。首次加载完整 5000 根，之后只读取
 ```text
 confirmed
 只使用 5000 根已收盘 K
-用于正式分型、笔、线段、中枢、买卖点和后续提醒
+内部仍拆成 stable / provisional；正式下游只消费 stable 与 COMMITTED 结构
 
 live
 使用已收盘 K + 当前未收盘 K
@@ -121,7 +320,7 @@ live
 
 图形约定：
 
-- 已确认笔与已确认线段使用实线；
+- 稳定笔与正式线段使用实线；
 - 未确认笔与未确认线段使用相同颜色、相同粗细的虚线；
 - 默认笔线宽降为 `1.1`，默认线段线宽降为 `2.2`，减少对 K 线的遮挡；
 - 未收盘 K 使用可配置的半透明时间带；
@@ -200,17 +399,20 @@ live
 当前 K：1
 无包含 K：3721
 分型：851
-已确认笔：338
-未确认笔：1
-已确认线段：61
-未确认线段：1
-笔中枢：46
-线段中枢：1
+完整笔链：338
+稳定笔：330
+候选笔：8
+正式线段：56
+候选线段：1
+正式笔中枢：基于 stable_strokes 计算
+正式线段中枢：基于 segments 计算
+最终端点发生迁移的线段：9
+端点迁移事件：27
 所有结构验证问题：0
-标准特征序列线段差分：61 / 61 一致
-确认依据差分：61 / 61 一致
-特征元素：307
-特征分型：63
+标准特征序列线段差分：57 / 57 一致
+确认依据差分：57 / 57 一致
+特征元素：659
+特征分型：88
 特征序列尾部缺口：0
 ```
 
@@ -224,6 +426,14 @@ artifacts/regression/live_5000_5m_demo_provisional_strokes.csv
 artifacts/regression/live_5000_5m_demo_provisional_segments.csv
 artifacts/regression/live_5000_5m_demo_hover_disabled.html
 artifacts/regression/live_5000_5m_demo_hover_dark_transparent.html
+artifacts/regression/gap_endpoint_lock_bug_summary.json
+artifacts/regression/gap_no_gap_competition_bug_summary.json
+artifacts/regression/gap_no_gap_competition_trace.csv
+artifacts/regression/gap_endpoint_migrations.csv
+artifacts/regression/gap_endpoint_303_migration_trace.csv
+artifacts/regression/first_segment_boundary_regression.json
+artifacts/regression/live_5000_5m_demo_unresolved_segment_prefix_strokes.csv
+artifacts/regression/structure_stability_5000.json
 ```
 
 这些文件仅用于算法和界面回归，不是真实市场行情。实际运行 Streamlit 时默认直接连接 Binance。
@@ -231,7 +441,7 @@ artifacts/regression/live_5000_5m_demo_hover_dark_transparent.html
 ## 自动化测试
 
 ```text
-79 passed, 1 skipped
+95 passed, 1 skipped
 ```
 
 覆盖新增内容：
@@ -285,3 +495,16 @@ PYTHONPATH=src python scripts/export_live_data_regression.py
 - 已经具备当前 K、确认结构和候选虚线的数据隔离；
 - 还没有后台常驻进程、数据库、WebSocket 守护和飞书消息；
 - 后续通知必须只使用已确认结构及 `confirmed_at_dt`，不能使用虚线候选。
+
+
+## 历史方案：v0.10.9 最后一笔隔离（已被 v0.10.10 取代）
+
+该版本曾尝试仅隔离当前最后一笔。这个策略不能构造稳定前缀，现仅保留为历史说明：
+
+```text
+segment_evidence.confirmed_at_position < len(strokes) - 1
+```
+
+若确认位置等于当前最后一笔，线段不会进入已确认集合，而是留在未完成线段区域，并由图表以同色虚线展示。纯特征序列单元测试仍可关闭该实时稳定策略，以便单独验证算法定义。
+
+新增原始 K 前缀回归：235 根 K 时第 20 笔确认的候选线段不会画成实线；增加第 236 根 K 后该笔被撤销，前两条实线段保持完全不变。
