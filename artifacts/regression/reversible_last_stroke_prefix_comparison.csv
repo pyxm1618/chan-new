@@ -1,0 +1,5 @@
+raw_bar_count,stroke_count,segment_index,start_position,end_position,confirmation,confirmed_at_position,last_stroke_position,stable
+235,21,0,1,4,GAP_REVERSE_FRACTAL,9,20,True
+235,21,1,4,11,NO_GAP,13,20,True
+236,20,0,1,4,GAP_REVERSE_FRACTAL,9,19,True
+236,20,1,4,11,NO_GAP,13,19,True

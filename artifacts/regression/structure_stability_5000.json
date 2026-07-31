@@ -1,0 +1,19 @@
+{
+  "bars_scanned": 5000,
+  "detected_stroke_retractions_expected_in_provisional_layer": 175,
+  "final_detected_strokes": 338,
+  "final_all_strokes": 338,
+  "final_stable_strokes": 330,
+  "final_provisional_strokes": 8,
+  "final_formal_segments": 56,
+  "final_provisional_segments": 1,
+  "formal_failure_count": 0,
+  "failures": {
+    "stable_stroke_retractions": [],
+    "formal_segment_retractions": [],
+    "pen_zone_disappearances": [],
+    "pen_zone_right_shrinks": [],
+    "segment_zone_disappearances": [],
+    "segment_zone_right_shrinks": []
+  }
+}
