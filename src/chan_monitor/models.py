@@ -144,6 +144,25 @@ class RawBar:
 
 
 @dataclass(frozen=True, slots=True)
+class MacdAnchor:
+    """MACD 在输入窗口第一根 K 线之前的精确递推状态。
+
+    有限窗口仅凭自身无法精确恢复 EMA12、EMA26 与 DEA。调用方在滚动窗口、
+    服务重启或持久化恢复时，应保存上一根已处理 K 线后的该状态，并将其作为
+    下一窗口的 ``macd_anchor`` 传入。
+    """
+
+    asof: datetime
+    ema_fast: float
+    ema_slow: float
+    dea: float
+
+    def __post_init__(self) -> None:
+        if self.asof.tzinfo is None:
+            raise ValueError("MacdAnchor.asof 必须是带时区的 datetime")
+
+
+@dataclass(frozen=True, slots=True)
 class MergedBar:
     id: int
     symbol: str
@@ -437,7 +456,13 @@ class FeatureFractal:
 
 @dataclass(frozen=True, slots=True)
 class SegmentEvidence:
-    """一条已确认线段的数据层确认依据。"""
+    """一条已确认线段的数据层确认依据。
+
+    ``gap_origin_fractal`` 记录进入“有缺口等待反向确认”状态时的首个主
+    特征分型。等待期间端点可能被后续更高顶或更低底迁移；当最终极值尚未
+    形成新的完整主特征分型时，``primary_fractal`` 仍保留最近可审计的主
+    分型，``final_endpoint`` 则明确记录线段实际采用的最终端点。
+    """
 
     segment_index: int
     start_position: int
@@ -445,12 +470,24 @@ class SegmentEvidence:
     confirmation: str
     primary_fractal: FeatureFractal
     reverse_fractal: FeatureFractal | None = None
+    gap_origin_fractal: FeatureFractal | None = None
+    final_endpoint: Fractal | None = None
+    # 线段真正进入正式提交账本的时间。它与线段端点时间、特征序列确认笔
+    # 时间是三个不同概念；实时通知与无未来函数回测必须使用该字段。
+    committed_at: datetime | None = None
+    # 当前分析输入中的原始 K 线零基位置。持久化到外部系统时应同时保存
+    # committed_at；窗口切换后该位置只用于本次运行内审计。
+    committed_at_bar_position: int | None = None
 
     @property
     def confirmed_at_position(self) -> int:
         if self.reverse_fractal is not None:
             return self.reverse_fractal.detected_at_position
         return self.primary_fractal.detected_at_position
+
+    @property
+    def is_committed(self) -> bool:
+        return self.committed_at is not None
 
 
 @dataclass(frozen=True, slots=True)
@@ -505,6 +542,29 @@ class CentralZone:
     @property
     def dd(self) -> float:
         return min(x.low for x in self.strokes)
+
+    @property
+    def departure_stroke(self) -> Stroke | None:
+        """中枢尾部已经完成的离开笔；它不属于 GG/DD 趋势比较的盘整本体。"""
+        last = self.strokes[-1]
+        if last.end_value < self.zd or last.end_value > self.zg:
+            return last
+        return None
+
+    @property
+    def trend_strokes(self) -> tuple[Stroke, ...]:
+        """用于同级别中枢 GG/DD 关系的盘整本体，不包含最终离开笔。"""
+        if self.departure_stroke is not None:
+            return self.strokes[:-1]
+        return self.strokes
+
+    @property
+    def trend_gg(self) -> float:
+        return max(x.high for x in self.trend_strokes)
+
+    @property
+    def trend_dd(self) -> float:
+        return min(x.low for x in self.trend_strokes)
 
     @property
     def source_start(self) -> datetime:
@@ -589,6 +649,34 @@ class SegmentCentralZone:
         return min(x.low for x in self.segments)
 
     @property
+    def departure_segment(self) -> Segment | None:
+        """中枢尾部已经完成的离开线段。
+
+        线段为连续走势，最终离开段必然在起点处与固定中枢区间相交，因此
+        扫描器会把它保留在中枢切片尾部。趋势 GG/DD 不能把这条 A/C 连接段
+        当作中枢盘整本体，否则相邻中枢会因连续端点而被系统性误判为重叠。
+        """
+        last = self.segments[-1]
+        if last.end_value < self.zd or last.end_value > self.zg:
+            return last
+        return None
+
+    @property
+    def trend_segments(self) -> tuple[Segment, ...]:
+        """用于严格趋势关系的中枢盘整本体，不包含最终离开线段。"""
+        if self.departure_segment is not None:
+            return self.segments[:-1]
+        return self.segments
+
+    @property
+    def trend_gg(self) -> float:
+        return max(x.high for x in self.trend_segments)
+
+    @property
+    def trend_dd(self) -> float:
+        return min(x.low for x in self.trend_segments)
+
+    @property
     def source_start(self) -> datetime:
         return self.segments[0].source_start
 
@@ -661,10 +749,25 @@ class TrendDivergence:
     exit_end_dt: datetime
     price_extreme: bool
     macd_divergence: bool
+    # True 表示 MACD 由真实历史起点递推，或由持久化 MacdAnchor 无缝恢复。
+    # 有限窗口自行用首价初始化只能作为候选证据，不能生成正式一买/一卖。
+    macd_state_exact: bool = True
+    strict_trend: bool = True
+    # 操作级别 c 内部必须已经形成对最后中枢 B 的次级别三类点，并至少
+    # 包含两个次级别中枢；stroke 是当前最低建模级别，只能以完成笔为下限。
+    sublevel_third_point: bool = True
+    sublevel_zone_count: int = 0
 
     @property
     def is_valid(self) -> bool:
-        return self.price_extreme and self.macd_divergence
+        return (
+            self.strict_trend
+            and self.price_extreme
+            and self.macd_divergence
+            and self.macd_state_exact
+            and self.sublevel_third_point
+            and self.sublevel_zone_count >= (0 if self.level == "stroke" else 2)
+        )
 
 
 @dataclass(frozen=True, slots=True)

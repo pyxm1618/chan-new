@@ -1,0 +1,17 @@
+{
+  "real_bars": 500,
+  "real_strokes": 26,
+  "real_stable_strokes": 19,
+  "real_formal_segments": 2,
+  "real_validator_issues": [],
+  "anchored_feature_tail_position": 24,
+  "real_last_stroke_position": 25,
+  "anchored_feature_tail_gap": 1,
+  "anchored_coverage_issues": [],
+  "real_prefixes_checked": 170,
+  "real_prefix_failure_count": 0,
+  "real_prefix_failures": [],
+  "demo_bars": 5000,
+  "demo_formal_segments": 56,
+  "demo_validator_issues": []
+}

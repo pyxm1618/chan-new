@@ -83,26 +83,45 @@ def raw_bars(segments):
 
 def down_case():
     segs = segment_chain(
-        [140,120,135,125,132,100,112,102,110,90,108,94],
-        start_bottom=False, durations=[5,5,5,5,20,5,5,5,2,6,10],
+        [140,120,135,125,132,100,112,102,110,90,108,80,95,85],
+        start_bottom=False, durations=[5,5,5,5,20,5,5,5,5,5,2,5,10],
         origin=datetime(2026,1,1,tzinfo=timezone.utc),
     )
-    segs[10] = with_internal_strokes(segs[10], [108,104,107,105,106.5,100,103,101,102,94], [5,5,5,5,20,5,5,5,2])
+    segs[10] = with_internal_strokes(segs[10], [108,98,104,100,103,90,96,92,95,80], [1] * 9)
+    segs[12] = with_internal_strokes(
+        segs[12],
+        [95,91.6666667,94.1666667,92.5,93.6666667,88.3333333,90.3333333,88.6666667,90,86.6666667,89.6666667,85],
+        [5,5,5,5,20,5,5,5,5,5,2],
+    )
     return segs
 
 
 def up_case():
     segs = segment_chain(
-        [60,80,65,75,68,100,88,98,90,110,92,106],
-        start_bottom=True, durations=[5,5,5,5,20,5,5,5,2,6,10],
+        [60,80,65,75,68,100,88,98,90,110,92,120,105,115],
+        start_bottom=True, durations=[5,5,5,5,20,5,5,5,5,5,2,5,10],
         origin=datetime(2026,3,1,tzinfo=timezone.utc),
     )
-    segs[10] = with_internal_strokes(segs[10], [92,96,93,95,93.5,101,98,100,99,106], [5,5,5,5,20,5,5,5,2])
+    segs[10] = with_internal_strokes(segs[10], [92,102,96,100,97,110,104,108,105,120], [1] * 9)
+    segs[12] = with_internal_strokes(
+        segs[12],
+        [105,108.3333333,105.8333333,107.5,106.3333333,111.6666667,109.6666667,111.3333333,110,113.3333333,110.3333333,115],
+        [5,5,5,5,20,5,5,5,5,5,2],
+    )
     return segs
 
 
 def simple_case(values, start_bottom, origin):
     return segment_chain(values, start_bottom=start_bottom, durations=[5]*(len(values)-1), origin=origin)
+
+
+def _commit_times(segments):
+    return {x.index: max(x.end_dt, x.source_end) + timedelta(microseconds=1) for x in segments}
+
+
+def _detect_trading_points(segments, zones, **kwargs):
+    kwargs.setdefault("segment_commit_times", _commit_times(segments))
+    return detect_trading_points(segments, zones, **kwargs)
 
 
 def main() -> None:
@@ -125,9 +144,9 @@ def main() -> None:
     for row, (name, segments) in enumerate(cases, 1):
         bars = raw_bars(segments)
         zones = detect_segment_central_zones(segments).zones
-        result = detect_trading_points(segments, zones, raw_bars=bars)
+        result = _detect_trading_points(segments, zones, raw_bars=bars, macd_history_anchored=True)
         issues = validate_trading_points(result.points, segments, zones, raw_bars=bars)
-        comparison = compare_trading_points_with_reference(result.points, segments, zones, raw_bars=bars)
+        comparison = compare_trading_points_with_reference(result.points, segments, zones, raw_bars=bars, macd_history_anchored=True)
         assert not issues and comparison.all_match
         fig.add_trace(go.Candlestick(x=[x.open_time for x in bars], open=[x.open for x in bars], high=[x.high for x in bars], low=[x.low for x in bars], close=[x.close for x in bars], name="模拟K线", showlegend=row==1), row=row, col=1)
         fig.add_trace(go.Scatter(x=[segments[0].start_dt]+[x.end_dt for x in segments], y=[segments[0].start_value]+[x.end_value for x in segments], mode="lines+markers", line={"color":"#7E22CE","width":5}, marker={"size":7}, name="已确认线段", showlegend=row==1), row=row, col=1)
