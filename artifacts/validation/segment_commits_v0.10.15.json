@@ -1,0 +1,14 @@
+{
+  "bars_scanned": 5000,
+  "formal_segments": 56,
+  "stable_strokes": 328,
+  "validator_issue_count": 0,
+  "validator_issues": [],
+  "missing_commit_time": [],
+  "commit_time_monotonic": true,
+  "commit_position_monotonic": true,
+  "commit_first_seen_mismatch_count": 0,
+  "commit_first_seen_mismatches": [],
+  "first_commit": "2026-01-01T14:04:59.999000+00:00",
+  "last_commit": "2026-01-18T02:39:59.999000+00:00"
+}

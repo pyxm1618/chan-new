@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Sequence
 
 from .binance import BinanceKlineSnapshot
-from .engine import AnalysisResult, analyze_bars
+from .engine import AnalysisResult, StructureAnchor, analyze_bars
 from .metadata import AnalysisMetadata
 from .models import FractalMark, RawBar, Segment, Stroke, StrokeDirection
 from .segments import SegmentMode
@@ -94,10 +94,18 @@ def analyze_snapshot(
     min_bi_len: int,
     metadata: AnalysisMetadata,
     segment_mode: SegmentMode,
+    left_boundary_anchored: bool = False,
+    left_anchor: StructureAnchor | None = None,
     previous: LiveAnalysisBundle | None = None,
 ) -> LiveAnalysisBundle:
     """已收盘数据与实时数据分层计算，杜绝当前 K 污染已确认结构。"""
-    if previous and previous.snapshot and previous.snapshot.closed_signature == snapshot.closed_signature:
+    if (
+        previous
+        and previous.snapshot
+        and previous.snapshot.closed_signature == snapshot.closed_signature
+        and previous.confirmed.left_boundary_anchored == left_boundary_anchored
+        and previous.confirmed.left_anchor == left_anchor
+    ):
         confirmed = previous.confirmed
     else:
         confirmed = analyze_bars(
@@ -106,6 +114,8 @@ def analyze_snapshot(
             min_bi_len=min_bi_len,
             metadata=metadata,
             segment_mode=segment_mode,
+            left_boundary_anchored=left_boundary_anchored,
+            left_anchor=left_anchor,
         )
     live_result = analyze_bars(
         snapshot.all_bars,
@@ -113,6 +123,8 @@ def analyze_snapshot(
         min_bi_len=min_bi_len,
         metadata=metadata,
         segment_mode=segment_mode,
+        left_boundary_anchored=left_boundary_anchored,
+        left_anchor=left_anchor,
     )
     overlay = build_live_overlay(confirmed, live_result, snapshot=snapshot)
     return LiveAnalysisBundle(confirmed=confirmed, overlay=overlay)
@@ -125,6 +137,8 @@ def analyze_static(
     min_bi_len: int,
     metadata: AnalysisMetadata,
     segment_mode: SegmentMode,
+    left_boundary_anchored: bool = False,
+    left_anchor: StructureAnchor | None = None,
 ) -> LiveAnalysisBundle:
     result = analyze_bars(
         bars,
@@ -132,6 +146,8 @@ def analyze_static(
         min_bi_len=min_bi_len,
         metadata=metadata,
         segment_mode=segment_mode,
+        left_boundary_anchored=left_boundary_anchored,
+        left_anchor=left_anchor,
     )
     return LiveAnalysisBundle(
         confirmed=result,
@@ -145,21 +161,70 @@ def build_live_overlay(
     *,
     snapshot: BinanceKlineSnapshot | None,
 ) -> LiveStructureOverlay:
-    stroke_prefix = _common_prefix(confirmed.strokes, live.strokes, _stroke_signature)
-    segment_prefix = _common_prefix(confirmed.segments, live.segments, _segment_signature)
+    """构造统一的候选尾部图层。
 
-    provisional_strokes: list[ProvisionalLine] = [
-        _stroke_as_line(x, "实时 K 触发的笔结构重算候选")
-        for x in live.strokes[stroke_prefix:]
-    ]
+    ``confirmed`` 中的 ``resolved_strokes`` / ``segments`` 是正式账本。正式
+    区间左侧可能存在冷启动未解析前缀，右侧可能存在可回撤尾部；两侧都必须
+    画成候选虚线，不能假设正式结构一定从数组第 0 项开始。
+    """
+    if not confirmed.left_boundary_resolved:
+        stroke_start = stroke_end = 0
+        provisional_strokes: list[ProvisionalLine] = [
+            _stroke_as_line(
+                x,
+                "窗口左边界缺少真实历史起点或持久化锚点，全部笔仅作候选",
+            )
+            for x in live.strokes
+        ]
+    else:
+        stroke_block = _find_contiguous_block(
+            confirmed.resolved_strokes,
+            live.strokes,
+            _stroke_signature,
+        )
+        if stroke_block is None:
+            stroke_start = stroke_end = 0
+        else:
+            stroke_start, stroke_end = stroke_block
+        provisional_strokes = [
+            _stroke_as_line(x, "窗口左边界位于持久化锚点之前，尚不能作为正式结构")
+            for x in live.strokes[:stroke_start]
+        ]
+        provisional_strokes.extend(
+            _stroke_as_line(x, "尚未进入稳定提交区，后续 K 仍可能使其迁移或撤销")
+            for x in live.strokes[stroke_end:]
+        )
     projection = _project_next_stroke(live)
     if projection is not None and not _same_line_as_last(provisional_strokes, projection):
         provisional_strokes.append(projection)
 
-    provisional_segments: list[ProvisionalLine] = [
-        _segment_as_line(x, "实时 K 触发的线段结构重算候选")
-        for x in live.segments[segment_prefix:]
-    ]
+    if not confirmed.left_boundary_resolved:
+        segment_start = segment_end = 0
+        provisional_segments: list[ProvisionalLine] = [
+            _segment_as_line(
+                x,
+                "窗口左边界缺少真实历史起点或持久化锚点，全部线段仅作候选",
+            )
+            for x in live.detected_segments
+        ]
+    else:
+        segment_block = _find_contiguous_block(
+            confirmed.segments,
+            live.detected_segments,
+            _segment_signature,
+        )
+        if segment_block is None:
+            segment_start = segment_end = 0
+        else:
+            segment_start, segment_end = segment_block
+        provisional_segments = [
+            _segment_as_line(x, "位于持久化锚点之前，无法作为本窗口正式线段")
+            for x in live.detected_segments[:segment_start]
+        ]
+        provisional_segments.extend(
+            _segment_as_line(x, "已检测但尚未由下一线段推进为 COMMITTED")
+            for x in live.detected_segments[segment_end:]
+        )
     segment_projection = _project_next_segment(live, provisional_strokes)
     if segment_projection is not None and not _same_line_as_last(provisional_segments, segment_projection):
         provisional_segments.append(segment_projection)
@@ -169,8 +234,8 @@ def build_live_overlay(
         live_result=live,
         provisional_strokes=tuple(provisional_strokes),
         provisional_segments=tuple(provisional_segments),
-        stroke_common_prefix=stroke_prefix,
-        segment_common_prefix=segment_prefix,
+        stroke_common_prefix=(stroke_end - stroke_start),
+        segment_common_prefix=(segment_end - segment_start),
         computed_at=(snapshot.fetched_at if snapshot else datetime.now(timezone.utc)),
     )
 
@@ -267,6 +332,23 @@ def _common_prefix(a: Sequence, b: Sequence, signature) -> int:
             break
         count += 1
     return count
+
+
+def _find_contiguous_block(
+    needle: Sequence,
+    haystack: Sequence,
+    signature,
+) -> tuple[int, int] | None:
+    """在候选链中定位正式结构块；正式块可能位于左未解析前缀之后。"""
+    left = tuple(signature(x) for x in needle)
+    right = tuple(signature(x) for x in haystack)
+    if not left:
+        return (0, 0)
+    width = len(left)
+    for start in range(len(right) - width + 1):
+        if right[start : start + width] == left:
+            return start, start + width
+    return None
 
 
 def _stroke_signature(value: Stroke) -> tuple:

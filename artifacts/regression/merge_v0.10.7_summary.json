@@ -1,0 +1,44 @@
+{
+  "version": "0.10.7",
+  "merge_source": "user uploaded 104114c9-a852-4392-b997-d7bfb8e63846.zip",
+  "merged_fixes": {
+    "first_segment_boundary_guard": true,
+    "gap_endpoint_migration": true
+  },
+  "demo_5000_5m": {
+    "raw_bars": 5000,
+    "merged_bars": 3721,
+    "fractals": 851,
+    "strokes": 338,
+    "segments": 54,
+    "feature_elements": 623,
+    "feature_fractals": 90,
+    "unresolved_prefix_strokes": 1,
+    "unfinished_segment_strokes": 3,
+    "first_segment": {
+      "start_position": 1,
+      "end_position": 4,
+      "direction": "up",
+      "start_value": 90.21135257685897,
+      "end_value": 110.1655985483843
+    },
+    "gap_endpoint_migrated_segments": 9,
+    "gap_endpoint_replacement_events": 41,
+    "reference_segment_match": "54/54",
+    "reference_evidence_match": "54/54",
+    "reference_all_match": true,
+    "validation_issues": 0
+  },
+  "real_snapshot": {
+    "strokes": 26,
+    "segments": 3,
+    "segment_central_zones": 1,
+    "unresolved_prefix_strokes": 2,
+    "unfinished_segment_strokes": 7
+  },
+  "tests": {
+    "passed": 86,
+    "skipped": 1
+  },
+  "boundary_note": "The guard rejects provably invalid candidates inside the loaded window; full-history persisted state is still required to eliminate theoretical left-boundary uncertainty."
+}

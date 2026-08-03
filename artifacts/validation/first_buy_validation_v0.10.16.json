@@ -1,0 +1,17 @@
+{
+  "random_cases": 1000,
+  "random_reference_mismatches": 0,
+  "random_formal_buy1_count": 682,
+  "demo_bars": 5000,
+  "demo_formal_segments": 56,
+  "demo_point_scans": 55,
+  "demo_trading_points": 0,
+  "demo_first_points": 0,
+  "real_bars": 500,
+  "real_formal_segments": 2,
+  "real_trading_points": 0,
+  "real_first_points": 0,
+  "checks": 4229,
+  "failure_count": 0,
+  "failures": []
+}

@@ -1,0 +1,48 @@
+{
+  "dataset": "DEMO / deterministic 5m regression; not real market data",
+  "root_cause": "after entering a gapped-primary wait state, the implementation kept migrating raw extremes and checking reverse confirmation but ignored later confirmed no-gap primary fractals",
+  "regression_start_position": 18,
+  "old_result": {
+    "start_position": 18,
+    "end_position": 31,
+    "confirmation": "GAP_REVERSE_FRACTAL",
+    "confirmed_at_position": 36
+  },
+  "fixed_result": {
+    "start_position": 18,
+    "end_position": 25,
+    "confirmation": "NO_GAP",
+    "confirmed_at_position": 27
+  },
+  "primary_candidates": [
+    {
+      "event": "primary_candidate",
+      "endpoint_position": 21,
+      "endpoint_price": 88.6365448331546,
+      "detected_at_position": 23,
+      "gap": true,
+      "selected_result": false
+    },
+    {
+      "event": "primary_candidate",
+      "endpoint_position": 25,
+      "endpoint_price": 87.98510805198188,
+      "detected_at_position": 27,
+      "gap": false,
+      "selected_result": true
+    },
+    {
+      "event": "primary_candidate",
+      "endpoint_position": 31,
+      "endpoint_price": 87.62698570132166,
+      "detected_at_position": 33,
+      "gap": false,
+      "selected_result": false
+    }
+  ],
+  "validation": {
+    "segment_validation_issues": 0,
+    "reference_all_match": true,
+    "skipped_no_gap_guard_issues": 0
+  }
+}

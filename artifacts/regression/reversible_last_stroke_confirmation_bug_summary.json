@@ -1,0 +1,49 @@
+{
+  "bug": "confirmed segment depended on reversible last stroke",
+  "policy": "segment evidence must satisfy confirmed_at_position < len(strokes)-1",
+  "prefixes": {
+    "235": {
+      "raw_bars": 235,
+      "strokes": 21,
+      "confirmed_segments": [
+        {
+          "start_position": 1,
+          "end_position": 4,
+          "confirmed_at_position": 9,
+          "confirmation": "GAP_REVERSE_FRACTAL"
+        },
+        {
+          "start_position": 4,
+          "end_position": 11,
+          "confirmed_at_position": 13,
+          "confirmation": "NO_GAP"
+        }
+      ],
+      "unfinished_segment_strokes": 10,
+      "last_stroke_position": 20,
+      "last_stroke_dependent_candidate_blocked": true
+    },
+    "236": {
+      "raw_bars": 236,
+      "strokes": 20,
+      "confirmed_segments": [
+        {
+          "start_position": 1,
+          "end_position": 4,
+          "confirmed_at_position": 9,
+          "confirmation": "GAP_REVERSE_FRACTAL"
+        },
+        {
+          "start_position": 4,
+          "end_position": 11,
+          "confirmed_at_position": 13,
+          "confirmation": "NO_GAP"
+        }
+      ],
+      "unfinished_segment_strokes": 9,
+      "last_stroke_position": 19,
+      "last_stroke_dependent_candidate_blocked": false
+    }
+  },
+  "stable_prefix_equal": true
+}

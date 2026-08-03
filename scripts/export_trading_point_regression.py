@@ -32,10 +32,9 @@ def stroke(a: Fractal, b: Fractal, index: int, duration: int) -> Stroke:
     direction = StrokeDirection.UP if a.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
     bars = []
     steps = max(3, duration + 2)
-    span = b.dt - a.dt
     for j in range(steps):
         r0, r1 = j / steps, (j + 1) / steps
-        t = a.dt + span * r0
+        t = a.dt + timedelta(minutes=j)
         o = a.value + (b.value - a.value) * r0
         c = a.value + (b.value - a.value) * r1
         wiggle = abs(b.value - a.value) * 0.01 + 0.02
@@ -45,10 +44,13 @@ def stroke(a: Fractal, b: Fractal, index: int, duration: int) -> Stroke:
 
 
 def segment_chain(values, *, start_bottom: bool, durations, origin) -> list[Segment]:
+    point_times = [origin]
+    for duration in durations:
+        point_times.append(point_times[-1] + timedelta(minutes=max(3, duration + 2)))
     points = []
-    for i, value in enumerate(values):
+    for i, (value, dt) in enumerate(zip(values, point_times)):
         bottom = (i % 2 == 0) if start_bottom else (i % 2 == 1)
-        points.append(fractal(origin + timedelta(hours=i * 20), FractalMark.BOTTOM if bottom else FractalMark.TOP, value, i))
+        points.append(fractal(dt, FractalMark.BOTTOM if bottom else FractalMark.TOP, value, i))
     result = []
     for i, (a, b) in enumerate(zip(points, points[1:])):
         s = stroke(a, b, i, durations[i])
@@ -57,17 +59,27 @@ def segment_chain(values, *, start_bottom: bool, durations, origin) -> list[Segm
 
 
 def with_internal_strokes(segment: Segment, values, durations) -> Segment:
+    spans = [max(3, duration + 2) for duration in durations]
+    available = int((segment.end_dt - segment.start_dt).total_seconds() // 60)
+    if sum(spans) > available:
+        raise ValueError("内部笔持续时间超过线段时间范围")
+    spans[-1] += available - sum(spans)
+    effective_durations = [max(1, span - 2) for span in spans]
+    times = [segment.start_dt]
+    for span in spans:
+        times.append(times[-1] + timedelta(minutes=span))
     points = []
-    span = segment.end_dt - segment.start_dt
-    for i, value in enumerate(values):
-        dt = segment.start_dt + span * (i / (len(values)-1))
+    for i, (value, dt) in enumerate(zip(values, times)):
         if segment.fx_a.mark is FractalMark.TOP:
             mark = FractalMark.TOP if i % 2 == 0 else FractalMark.BOTTOM
         else:
             mark = FractalMark.BOTTOM if i % 2 == 0 else FractalMark.TOP
         points.append(fractal(dt, mark, value, 1000 + segment.index * 100 + i))
     points[0], points[-1] = segment.fx_a, segment.fx_b
-    strokes = tuple(stroke(a, b, 1000 + segment.index * 100 + i, durations[i]) for i, (a, b) in enumerate(zip(points, points[1:])))
+    strokes = tuple(
+        stroke(a, b, 1000 + segment.index * 100 + i, effective_durations[i])
+        for i, (a, b) in enumerate(zip(points, points[1:]))
+    )
     return replace(segment, strokes=strokes)
 
 
@@ -83,26 +95,45 @@ def raw_bars(segments):
 
 def down_case():
     segs = segment_chain(
-        [140,120,135,125,132,100,112,102,110,90,108,94],
-        start_bottom=False, durations=[5,5,5,5,20,5,5,5,2,6,10],
+        [140,120,135,125,132,100,112,102,110,90,108,80,95,85],
+        start_bottom=False, durations=[5,5,5,5,20,5,5,5,5,5,25,5,87],
         origin=datetime(2026,1,1,tzinfo=timezone.utc),
     )
-    segs[10] = with_internal_strokes(segs[10], [108,104,107,105,106.5,100,103,101,102,94], [5,5,5,5,20,5,5,5,2])
+    segs[10] = with_internal_strokes(segs[10], [108,98,104,100,103,90,96,92,95,80], [1] * 9)
+    segs[12] = with_internal_strokes(
+        segs[12],
+        [95,91.6666667,94.1666667,92.5,93.6666667,88.3333333,90.3333333,88.6666667,90,86.6666667,89.6666667,85],
+        [5,5,5,5,20,5,5,5,5,5,2],
+    )
     return segs
 
 
 def up_case():
     segs = segment_chain(
-        [60,80,65,75,68,100,88,98,90,110,92,106],
-        start_bottom=True, durations=[5,5,5,5,20,5,5,5,2,6,10],
+        [60,80,65,75,68,100,88,98,90,110,92,120,105,115],
+        start_bottom=True, durations=[5,5,5,5,20,5,5,5,5,5,25,5,87],
         origin=datetime(2026,3,1,tzinfo=timezone.utc),
     )
-    segs[10] = with_internal_strokes(segs[10], [92,96,93,95,93.5,101,98,100,99,106], [5,5,5,5,20,5,5,5,2])
+    segs[10] = with_internal_strokes(segs[10], [92,102,96,100,97,110,104,108,105,120], [1] * 9)
+    segs[12] = with_internal_strokes(
+        segs[12],
+        [105,108.3333333,105.8333333,107.5,106.3333333,111.6666667,109.6666667,111.3333333,110,113.3333333,110.3333333,115],
+        [5,5,5,5,20,5,5,5,5,5,2],
+    )
     return segs
 
 
 def simple_case(values, start_bottom, origin):
     return segment_chain(values, start_bottom=start_bottom, durations=[5]*(len(values)-1), origin=origin)
+
+
+def _commit_times(segments):
+    return {x.fingerprint: max(x.end_dt, x.source_end) + timedelta(microseconds=1) for x in segments}
+
+
+def _detect_trading_points(segments, zones, **kwargs):
+    kwargs.setdefault("segment_commit_times", _commit_times(segments))
+    return detect_trading_points(segments, zones, **kwargs)
 
 
 def main() -> None:
@@ -125,9 +156,16 @@ def main() -> None:
     for row, (name, segments) in enumerate(cases, 1):
         bars = raw_bars(segments)
         zones = detect_segment_central_zones(segments).zones
-        result = detect_trading_points(segments, zones, raw_bars=bars)
-        issues = validate_trading_points(result.points, segments, zones, raw_bars=bars)
-        comparison = compare_trading_points_with_reference(result.points, segments, zones, raw_bars=bars)
+        result = _detect_trading_points(segments, zones, raw_bars=bars, macd_history_anchored=True)
+        issues = validate_trading_points(
+            result.points,
+            segments,
+            zones,
+            raw_bars=bars,
+            segment_commit_times=_commit_times(segments),
+            macd_history_anchored=True,
+        )
+        comparison = compare_trading_points_with_reference(result.points, segments, zones, raw_bars=bars, macd_history_anchored=True)
         assert not issues and comparison.all_match
         fig.add_trace(go.Candlestick(x=[x.open_time for x in bars], open=[x.open for x in bars], high=[x.high for x in bars], low=[x.low for x in bars], close=[x.close for x in bars], name="模拟K线", showlegend=row==1), row=row, col=1)
         fig.add_trace(go.Scatter(x=[segments[0].start_dt]+[x.end_dt for x in segments], y=[segments[0].start_value]+[x.end_value for x in segments], mode="lines+markers", line={"color":"#7E22CE","width":5}, marker={"size":7}, name="已确认线段", showlegend=row==1), row=row, col=1)
