@@ -683,8 +683,6 @@ def _detect_first_points_at_level(
             direction = StrokeDirection.UP
             point_type = TradingPointType.SELL1
         else:
-            # 核心区分离而整体波动区间仍重叠，原理论定义为更高级别中枢，
-            # 不能把它误判成趋势与一类点。
             if core_down or core_up:
                 point_type = TradingPointType.BUY1 if core_down else TradingPointType.SELL1
                 candidates.append(
@@ -733,9 +731,6 @@ def _detect_first_points_at_level(
         entry = values[entry_pos]
         exit_ = values[exit_pos]
         internal_third = _internal_zone_third_point(exit_, last, direction)
-        # segment 是正式操作级别，c 必须在自身内部包含对最后中枢 B 的次级别
-        # 三类点，而且至少包含两个次级别中枢。stroke 是当前数据模型的最低
-        # 递归层，只能以完成笔作为解析下限。
         sublevel_zone_count = (
             internal_third.sublevel_zone_count if internal_third is not None else 0
         )
@@ -745,8 +740,6 @@ def _detect_first_points_at_level(
         entry_area = _directional_macd_area(entry, direction, macd.histogram)
         exit_area = _directional_macd_area(exit_, direction, macd.histogram)
 
-        # c 必须成为从 b 开始到 c 之前整个同级别趋势的新极值，而不仅仅是
-        # 与 b 的终点作一次局部比较。
         prior_units = values[entry_pos:exit_pos]
         if direction is StrokeDirection.DOWN:
             previous_extreme = min(float(x.low) for x in prior_units)
@@ -885,7 +878,6 @@ def _detect_first_points_at_level(
                 ("MACD面积方向", "负柱" if direction is StrokeDirection.DOWN else "正柱"),
                 ("b方向MACD面积", f"{entry_area:.12g}"),
                 ("c方向MACD面积", f"{exit_area:.12g}"),
-                # 兼容 v0.10.13 以前的审计字段名。
                 ("进入MACD面积", f"{entry_area:.12g}"),
                 ("离开MACD面积", f"{exit_area:.12g}"),
                 ("MACD状态", "精确"),
@@ -912,6 +904,7 @@ def _detect_first_points_at_level(
         )
 
     return _FirstPointLevelResult(tuple(points), tuple(candidates), tuple(divergences))
+
 
 def _detect_local_stroke_first_points(
     segment: Segment, macd: _MacdComputation
@@ -953,7 +946,6 @@ def _zone_views(zones: Sequence[Any], units: Sequence[Any]) -> tuple[_ZoneView, 
             or getattr(zone, "trend_strokes", None)
             or members
         )
-        # 去掉最终离开单元后，至少仍需三个同级别走势才能称为中枢本体。
         if len(trend_members) < 3:
             continue
         result.append(
@@ -973,8 +965,6 @@ def _zone_views(zones: Sequence[Any], units: Sequence[Any]) -> tuple[_ZoneView, 
 def _find_entry_position(
     units: Sequence[Any], previous: _ZoneView, last: _ZoneView, direction: StrokeDirection
 ) -> int | None:
-    # 扫描器因价格连续性会把最终离开线段保留在前中枢切片尾部；该尾段正是
-    # A（连接前后两个中枢的同向走势），因此从 previous.end 开始寻找。
     lo = max(0, previous.end)
     hi = min(len(units) - 1, last.start - 1)
     for pos in range(hi, lo - 1, -1):
@@ -993,8 +983,6 @@ def _find_entry_position(
 def _find_exit_position(
     units: Sequence[Any], zone: _ZoneView, direction: StrokeDirection
 ) -> int | None:
-    # 已完成中枢的 c 只能是其切片最后一条离开单元。若中途离开后又返回，
-    # 中枢会继续延伸，那次离开属于中枢震荡，不得提前输出一类点。
     pos = zone.end
     if pos < 0 or pos >= len(units):
         return None
@@ -1009,12 +997,7 @@ def _find_exit_position(
 def _internal_zone_third_point(
     unit: Any, zone: _ZoneView, direction: StrokeDirection
 ) -> _InternalThirdPoint | None:
-    """返回 c 内部对最后中枢 B 形成的次级别三类点及中枢数量。
-
-    下跌 c：内部先向下离开 ``ZD``，随后向上回抽不回到 ``ZD``，再继续
-    向下；上涨 c 对称。标准 ``a+A+b+B+c`` 背驰还要求 c 至少包含两个
-    次级别中枢，因此三笔形似结构不会被提升为正式一类点。
-    """
+    """返回 c 内部对最后中枢 B 形成的次级别三类点及中枢数量。"""
     lower_units = tuple(getattr(unit, "strokes", ()))
     if len(lower_units) < 3:
         return None
@@ -1052,12 +1035,7 @@ def build_macd_anchor(
     *,
     anchor: MacdAnchor | None = None,
 ) -> MacdAnchor:
-    """递推并返回最后一根 K 收盘后的 MACD 状态。
-
-    ``anchor`` 表示第一根输入 K 之前的状态；没有 anchor 时，调用方必须保证
-    输入从该品种、该周期的真实历史起点开始。该函数用于滚动窗口和服务重启时
-    持久化 EMA12、EMA26 与 DEA，避免窗口变化改变背驰结论。
-    """
+    """递推并返回最后一根 K 收盘后的 MACD 状态。"""
     computation = _macd_histogram(
         raw_bars,
         history_anchored=anchor is None,
@@ -1095,6 +1073,20 @@ def _macd_histogram(
         if stream.interval != anchor.interval:
             raise ValueError(
                 f"MacdAnchor 周期不匹配：{anchor.interval} != {stream.interval}"
+            )
+        expected_from_cursor = next_open_time(anchor.last_open_time, anchor.interval)
+        if anchor.expected_next_open_time != expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 游标与周期不一致："
+                f"last_open_time={anchor.last_open_time.isoformat()}，"
+                f"周期 {anchor.interval} 的下一根应为 {expected_from_cursor.isoformat()}，"
+                f"锚点却声明 {anchor.expected_next_open_time.isoformat()}"
+            )
+        if anchor.last_close_time > expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 收盘时间越过下一周期起点："
+                f"last_close_time={anchor.last_close_time.isoformat()}，"
+                f"下一根应从 {expected_from_cursor.isoformat()} 开始"
             )
         if bars[0].open_time != anchor.expected_next_open_time:
             raise ValueError(
@@ -1173,10 +1165,7 @@ def _directional_macd_area(
         if unit.source_start <= dt <= unit.source_end
     )
     if direction is StrokeDirection.DOWN:
-        # 下跌背驰只比较绿柱（负柱）面积。反向红柱属于内部反弹，不能作为
-        # 下跌力度累加，否则会同时制造假阳性与假阴性。
         return float(sum(-value for value in values if value < 0.0))
-    # 上涨背驰只比较红柱（正柱）面积。
     return float(sum(value for value in values if value > 0.0))
 
 
@@ -1203,11 +1192,6 @@ def _formal_segment_commit_times(
     segment_evidence: Sequence[SegmentEvidence],
     explicit: Mapping[str, datetime] | None,
 ) -> dict[int, datetime]:
-    """汇总强绑定的正式提交时间。
-
-    ``segment_index`` 只是当前链内位置，不能跨品种或跨恢复会话充当身份。
-    结构证据必须携带几何指纹；外部持久化映射必须直接以指纹为键。
-    """
     by_index = {x.index: x for x in segments}
     by_fingerprint: dict[str, Segment] = {}
     for segment in segments:
