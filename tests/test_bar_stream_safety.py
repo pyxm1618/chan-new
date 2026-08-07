@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -50,3 +51,23 @@ def test_macd_anchor_rejects_bar_closing_after_next_interval_opens() -> None:
 
     with pytest.raises(ValueError, match="连续|收盘时间"):
         build_macd_anchor((malformed,))
+
+
+def test_macd_anchor_rejects_forged_next_open_cursor() -> None:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = _bar(
+        interval="5m",
+        open_time=start,
+        close_time=start + timedelta(minutes=5),
+    )
+    anchor = build_macd_anchor((first,))
+    forged_next = start + timedelta(hours=1)
+    forged = replace(anchor, expected_next_open_time=forged_next)
+    tail = _bar(
+        interval="5m",
+        open_time=forged_next,
+        close_time=forged_next + timedelta(minutes=5),
+    )
+
+    with pytest.raises(ValueError, match="MacdAnchor.*周期|游标|不连续"):
+        build_macd_anchor((tail,), anchor=forged)
