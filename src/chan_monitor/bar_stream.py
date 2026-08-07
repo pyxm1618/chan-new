@@ -84,13 +84,27 @@ def validate_bar_stream(raw_bars: Sequence[RawBar]) -> BarStreamValidation:
     if any(bar.interval != interval for bar in bars):
         raise ValueError("MACD 输入 K 线包含多个周期")
 
-    for previous, current in zip(bars, bars[1:]):
+    try:
+        next_times = tuple(next_open_time(bar.open_time, interval) for bar in bars)
+    except ValueError as exc:
+        return BarStreamValidation(symbol, interval, False, str(exc))
+
+    for bar, expected_next in zip(bars, next_times):
+        if bar.close_time > expected_next:
+            return BarStreamValidation(
+                symbol,
+                interval,
+                False,
+                (
+                    "K 线收盘时间越过下一周期起点："
+                    f"{bar.open_time.isoformat()} 的 close_time={bar.close_time.isoformat()}，"
+                    f"下一根应从 {expected_next.isoformat()} 开始"
+                ),
+            )
+
+    for (previous, current), expected in zip(zip(bars, bars[1:]), next_times):
         if current.open_time <= previous.open_time:
             raise ValueError("MACD 输入 K 线必须按 open_time 严格递增且不能重复")
-        try:
-            expected = next_open_time(previous.open_time, interval)
-        except ValueError as exc:
-            return BarStreamValidation(symbol, interval, False, str(exc))
         if current.open_time != expected:
             return BarStreamValidation(
                 symbol,
