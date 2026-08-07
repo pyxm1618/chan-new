@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "czsc-fractal-monitor"
-version = "0.10.16"
+version = "0.10.17"
 description = "Binance 5000-bar live K-line collection with confirmed and provisional CZSC structures"
 readme = "README.md"
 requires-python = ">=3.10"
