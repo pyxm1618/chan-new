@@ -71,3 +71,23 @@ def test_macd_anchor_rejects_forged_next_open_cursor() -> None:
 
     with pytest.raises(ValueError, match="MacdAnchor.*周期|游标|不连续"):
         build_macd_anchor((tail,), anchor=forged)
+
+
+def test_macd_anchor_rejects_close_time_past_its_next_open_cursor() -> None:
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    first = _bar(
+        interval="5m",
+        open_time=start,
+        close_time=start + timedelta(minutes=5),
+    )
+    anchor = build_macd_anchor((first,))
+    forged_close = start + timedelta(minutes=6)
+    forged = replace(anchor, asof=forged_close, last_close_time=forged_close)
+    tail = _bar(
+        interval="5m",
+        open_time=start + timedelta(minutes=5),
+        close_time=start + timedelta(minutes=10),
+    )
+
+    with pytest.raises(ValueError, match="MacdAnchor.*收盘|游标|周期"):
+        build_macd_anchor((tail,), anchor=forged)
