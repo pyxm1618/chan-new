@@ -6,7 +6,7 @@ from typing import Sequence
 
 import pandas as pd
 
-from .bar_stream import validate_bar_stream
+from .bar_stream import next_open_time, validate_bar_stream
 from .models import MacdAnchor, RawBar, Segment, SegmentCentralZone, SegmentEvidence, Stroke, TradingPoint, unique_elements
 
 REFERENCE_NAME = "严格 GG/DD 趋势 + c 内三类点/双中枢 + 同方向 MACD（独立字典复算）"
@@ -333,6 +333,20 @@ def _hist(bars, *, history_anchored, anchor):
     if anchor is not None:
         if stream.symbol != anchor.symbol or stream.interval != anchor.interval:
             raise ValueError("MacdAnchor 与参考窗口品种或周期不匹配")
+        expected_from_cursor = next_open_time(anchor.last_open_time, anchor.interval)
+        if anchor.expected_next_open_time != expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 参考游标与周期不一致："
+                f"last_open_time={anchor.last_open_time.isoformat()}，"
+                f"周期 {anchor.interval} 的下一根应为 {expected_from_cursor.isoformat()}，"
+                f"锚点却声明 {anchor.expected_next_open_time.isoformat()}"
+            )
+        if anchor.last_close_time > expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 参考收盘时间越过下一周期起点："
+                f"last_close_time={anchor.last_close_time.isoformat()}，"
+                f"下一根应从 {expected_from_cursor.isoformat()} 开始"
+            )
         if bars[0].open_time != anchor.expected_next_open_time:
             raise ValueError("MacdAnchor 与参考窗口不连续")
         if not stream.continuous:
