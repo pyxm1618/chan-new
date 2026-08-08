@@ -14,7 +14,11 @@ from .models import (
     StrokeDirection,
 )
 
-DEFAULT_MIN_BI_LEN = 6
+# Lesson 77 fixed-level default: a top/bottom fractal pair must leave at least
+# one non-included K outside both three-K fractals, hence 3 + 1 + 3 = 7.
+# Callers may still pass min_bi_len=6 explicitly for historical CZSC-compatibility
+# regressions, but that override is not the original-theory default.
+DEFAULT_MIN_BI_LEN = 7
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,15 +35,18 @@ def check_bi(
 ) -> tuple[Stroke | None, list[MergedBar]]:
     """从一段未完成笔的无包含 K 线中查找一笔。
 
-    该函数保持 CZSC ``check_bi`` 的候选笔语义：
+    该函数保持 CZSC ``check_bi`` 的候选笔语义，但默认笔长使用第77课口径：
 
     1. 起点使用序列中的第一个分型；
     2. 若起点为底分型，从后续更高的顶分型中选择最高者；
        若起点为顶分型，从后续更低的底分型中选择最低者；
     3. 起止分型的价格区间不能互相包含；
     4. 从起点分型第一根 K 到终点分型第三根 K 的无包含 K 数量
-       必须不小于 ``min_bi_len``；
+       必须不小于 ``min_bi_len``；默认值 7 保证两个三 K 分型之间至少存在
+       一根不属于任一分型的独立 K；
     5. 成笔后保留终点分型的三根 K，从其第一根开始寻找下一笔。
+
+    ``min_bi_len=6`` 仅保留给历史 CZSC-compatible 对照，不代表原著默认口径。
     """
     if min_bi_len < 3:
         raise ValueError("min_bi_len 不能小于 3")
