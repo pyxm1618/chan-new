@@ -441,6 +441,44 @@ EXPANDED_TO_HIGHER_LEVEL
 
 Phase 早期可以先实现最小必要集，但数据模型必须能够表达延伸/新生/级别扩展。
 
+### 8.5 原著趋势与级别扩展的精确边界：GG/DD 不能降格为质量条件
+
+这是 `ORIGINAL_THEORY` 的结构身份规则，不是都业华强弱规则。
+
+对前后两个**同级别中枢**，原著“走势中枢中心定理二”给出：
+
+```text
+后 GG < 前 DD
+<=> 下跌及其延续
+
+后 DD > 前 GG
+<=> 上涨及其延续
+```
+
+因此，判断两个同级别中枢是否真正形成趋势及延续，必须看围绕中枢的**全部相关波动区间**是否完全分离，而不能只看中枢核心区 `[ZD, ZG]` 是否分离。
+
+特别地：
+
+```text
+后 ZG < 前 ZD
+但 后 GG >= 前 DD
+```
+
+或上涨镜像情况，表示：
+
+> 两个中枢核心区已经分离，但围绕中枢的波动区仍有重叠。
+
+原著将这种情况归入**形成更高级别走势中枢**，而不是下跌/上涨趋势及其延续。
+
+因此：
+
+- `ZG/ZD` 是中枢核心区边界，也是标准 B3 的关键边界；
+- `GG/DD` 参与前后同级别中枢是否构成趋势/级别扩展的严格判定；
+- **不得把 `GG/DD` 完全分离降格为“更强趋势”的 QualityFact；**
+- **不得用 `ZG/ZD` 核心区分离替代 strict trend identity。**
+
+当前 PR #13 使用 `last.gg < previous.dd` / `last.dd > previous.gg` 作为单层趋势门槛，在这一点上与原著该定理方向一致；其 `core_down/core_up` 分支不提升为趋势买点也是正确方向。
+
 ---
 
 ## 9. Layer D：背驰语义与背驰证据分离
@@ -518,6 +556,31 @@ ratio = 0.63
 strong_divergence = true
 ```
 
+### 9.5 盘整背驰是背驰事实，不自动等于“走势终结”
+
+原著对盘整背驰的核心描述，是某次企图脱离中枢的运动力度不足，随后重新回到中枢；很多第二、第三类买点也可能由盘整背驰构成。
+
+因此程序必须区分：
+
+```text
+ConsolidationDivergenceFact
+```
+
+与：
+
+```text
+MovementCompleted / DuTerminationPattern
+```
+
+盘整背驰事实成立后：
+
+- 不能自动生成标准 B1；
+- 不能仅凭该事实就把当前 Movement 标成 `COMPLETED`；
+- 不能直接把它升级成通用 `TerminationMode.CONSOLIDATION_DIVERGENCE`；
+- 应由后续中枢延伸、级别扩展、第三类买卖点等结构事实决定具体演化。
+
+都业华实践层可以在额外条件满足时把某种盘整背驰归入其“四种终结模式”之一，但那属于 `DuTerminationPattern` classifier，而不是原著 `DivergenceFact` 自己带有的终结语义。
+
 ---
 
 ## 10. Layer E：标准买卖点身份
@@ -584,6 +647,7 @@ SEGMENT_APPROXIMATION
 原著核心：
 
 - 标准趋势至少包含两个同级别中枢；
+- 前后同级别中枢构成真正趋势及延续时，必须满足 §8.5 的 GG/DD 波动区完全分离条件；
 - 第一类买点与该级别趋势背驰直接相关；
 - 一个中枢后的盘整背驰不是标准趋势背驰 B1；超大级别可讨论“类一买”。
 
@@ -591,9 +655,11 @@ SEGMENT_APPROXIMATION
 
 ```text
 zone_count >= 2
++
+strict same-level trend relation
 ```
 
-是形成“趋势”这一身份的理论底线。
+共同构成趋势身份底线。
 
 但：
 
@@ -851,17 +917,31 @@ higher-level turning region / extremum
 
 ### 13.6 共振不作为 canonical 原子边
 
-原著确实存在“不同级别同步共振”的概念，但程序必须面对：
+原著第17课明确提到“不同级别同时出现第一类买卖点，也就是出现不同级别的同步共振”。因此，共振这个概念本身并非纯粹的都业华后加术语。
+
+但程序仍必须面对：
 
 - 多长时间算同步；
 - 是否必须同一极值；
 - 是否允许若干 bar 的窗口。
 
-这些存在 profile 语义，因此建议：
+这些存在工程/profile 语义，因此建议：
 
 - 底层保留时间/价格事实和 `COINCIDES`；
 - `SYNCHRONOUS_WITH` 如果存在，必须 profile-versioned；
-- 最终“共振”由 `CompositeSignal` 派生。
+- 最终可交易“共振信号”仍由 `CompositeSignal` 派生。
+
+### 13.7 不预留泛化 `TRIGGERS` 作为无约束关系
+
+小级别背驰引发更大级别转折确实需要表达，但 generic `TRIGGERS` 太容易把不同理论机制混在一起。
+
+当前保留专门的：
+
+```text
+OriginalCrossLevelTurnFact
+```
+
+来表达原著层的跨级别转折事实；如果未来关系图确实需要边类型，应使用语义明确、带严格条件的 `CROSS_LEVEL_TURN_OF` 或等价名称，而不是把小转大、区间套、买点构成统一塞进 `TRIGGERS`。
 
 ---
 
@@ -1064,6 +1144,16 @@ DuTerminationPattern
 
 课程目录能确认存在“四种终结模式”，多个二手资料对四项内容高度一致；精确分类条件仍属于 Practice Layer。
 
+这里保留“中枢背驰”这一名称，是因为公开的都业华课程整理本身使用该实践术语；**不要仅为了贴近原著术语就擅自改名为“趋势背驰”**。未来若通过原课程核验确认二者存在严格一一映射，再在 Practice classifier 中记录映射关系。
+
+同样，当前不能把“中枢无背驰直接终结”未经核验地定义成：
+
+```text
+中枢延伸 -> 最终级别扩展
+```
+
+或任何其他唯一算法。现阶段只保留 Practice pattern 名称和来源状态，具体结构条件必须等待原课程证据。
+
 ### 17.2 强弱体系
 
 强弱评价只消费已经存在的身份/结构事实。
@@ -1218,6 +1308,8 @@ source_type = PROJECT_POLICY
 - 不再使用 `segment.strokes` 冒充真实低级别；
 - 单级别 detector 只消费同层 Segment / SegmentCentralZone；
 - 正式提交时间和 fingerprint 证据继续 fail closed；
+- 前后同级别 SegmentCentralZone 的趋势门槛使用 GG/DD 完全分离，而不是仅用 ZG/ZD 核心区分离；
+- 核心区已分离但 GG/DD 波动区仍重叠时不提升为趋势 B1；
 - B3 基础边界使用 ZG/ZD；
 - B2/B3 可以在未来允许重合。
 
@@ -1303,6 +1395,7 @@ CrossLevelEvidence
 
 - 保留 `SEGMENT_APPROXIMATION` detector；
 - 明确 `IdentityBasis=SEGMENT_APPROXIMATION`；
+- 保留 GG/DD strict trend 门槛，不用 ZG/ZD 核心分离替换；
 - 拆出 `QualityFacts`；
 - 实现 `QualityProfile`；
 - 实现 `StrategyFilter`；
@@ -1453,10 +1546,26 @@ STRICT_RECURSIVE CentralZone
 must be composed of completed direct-sublevel MovementType
 ```
 
-### 21.4 B1
+### 21.4 趋势与 B1
 
 ```text
 Trend requires >= 2 same-level central zones
+Down trend continuation requires later.GG < previous.DD
+Up trend continuation requires later.DD > previous.GG
+```
+
+并且：
+
+```text
+later.ZG < previous.ZD
+but later.GG >= previous.DD
+```
+
+属于核心区分离但波动区重叠，应进入高级别中枢/级别扩展语义，不得仅凭 ZG/ZD 分离认定 strict down trend。
+
+同时：
+
+```text
 MACD alone must not define ORIGINAL_THEORY divergence
 ```
 
@@ -1498,9 +1607,33 @@ must never masquerade as a real lower-level AnalysisContext
 ### 21.10 共振
 
 ```text
-Resonance is derived / profile-versioned
-not a new TradingPointType
+Resonance may be an ORIGINAL_THEORY descriptive phenomenon,
+but executable resonance rules are derived / profile-versioned
+and must not become a new TradingPointType
 ```
+
+### 21.11 盘整背驰
+
+```text
+ConsolidationDivergenceFact
+!= automatic MovementCompletion
+!= automatic Standard TradingPoint
+```
+
+### 21.12 都业华四终结
+
+```text
+DuTerminationPattern details
+must remain practice-source-bound until primary course evidence is verified
+```
+
+特别禁止在证据不足时把：
+
+```text
+CENTER_NO_DIVERGENCE
+```
+
+直接等同为某一个固定的中枢延伸/级别扩展算法。
 
 ---
 
@@ -1532,7 +1665,7 @@ not a new TradingPointType
 
 ### 23.1 缠中说禅原著
 
-1. **中枢、盘整、趋势、走势终完美、B2 构成定律**  
+1. **中枢、盘整、趋势、走势终完美、B2 构成定律、同步共振**  
    《教你炒股票17：走势终完美》  
    https://iczsc.com/read/017/
 
@@ -1540,7 +1673,7 @@ not a new TradingPointType
    《教你炒股票18》  
    https://iczsc.com/read/018/
 
-3. **中枢延伸/级别扩展、GG/DD、ZG/ZD、第三类买卖点**  
+3. **中枢延伸/级别扩展、GG/DD、ZG/ZD、严格趋势边界、第三类买卖点**  
    《教你炒股票20》  
    https://iczsc.com/read/020/
 
@@ -1624,6 +1757,7 @@ SEGMENT_APPROXIMATION 单层买卖点
 - 当前 `SegmentCentralZone` 不是 canonical MovementCentralZone；
 - 当前 MACD hard-gated B1 是项目近似技术债；
 - 当前 B2/B3 是 operational approximation；
+- **当前 GG/DD strict trend 判定不是技术债，不能按 ZG/ZD 核心分离替换；**
 - 这些不要求今天全部重写，但从此不得继续把近似路径扩张成唯一理论本体。
 
 后续真正递归开发时：
@@ -1640,4 +1774,4 @@ SEGMENT_APPROXIMATION 单层买卖点
 
 ## 25. 最终一句话
 
-> **市场周期只是观察数据的粒度；走势类型和中枢递归生成理论级别；几何线段不是天然次级别走势；买卖点身份由理论结构及必要 provenance 决定，质量由事实评价，策略只做筛选；区间套负责逐级定位，买点构成负责身份 provenance，共振只是多级别事实之上的组合；当前 Segment 版本作为可用 operational approximation 保留，但终局 canonical 路径必须建立在 MovementType、DecompositionContext 与真实 StructureLevelGraph 之上。**
+> **市场周期只是观察数据的粒度；走势类型和中枢递归生成理论级别；几何线段不是天然次级别走势；前后同级别中枢只有在 GG/DD 全波动区完全分离时才形成原著意义上的趋势及延续，ZG/ZD 核心区分离但波动区重叠属于更高级别中枢语义；买卖点身份由理论结构及必要 provenance 决定，质量由事实评价，策略只做筛选；区间套负责逐级定位，买点构成负责身份 provenance，共振是多级别事实之上的描述/组合而不是新买点；当前 Segment 版本作为可用 operational approximation 保留，但终局 canonical 路径必须建立在 MovementType、DecompositionContext 与真实 StructureLevelGraph 之上。**
