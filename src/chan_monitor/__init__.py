@@ -6,7 +6,7 @@ from .segment_central_zone_reference import compare_segment_central_zones_with_r
 from .segment_central_zones import detect_segment_central_zones, validate_segment_central_zones
 from .trading_point_reference import compare_trading_points_with_reference
 from .trading_points import build_macd_anchor
-from .single_level_trading_points import detect_trading_points, validate_trading_points
+from .formal_single_level_trading_points import detect_trading_points, validate_trading_points
 from .engine import AnalysisResult, FractalEngine, StructureAnchor, StructureState, analyze_bars
 from . import engine as _engine_module
 from .fractals import check_fractal, detect_fractals, remove_inclusions
