@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
+from .bar_stream import next_open_time, raw_bar_fingerprint, validate_bar_stream
 from .central_zones import detect_central_zones
 from .models import (
     CentralZone,
+    MacdAnchor,
     RawBar,
     Segment,
     SegmentCentralZone,
@@ -59,41 +61,90 @@ class _FirstPointLevelResult:
     divergences: tuple[TrendDivergence, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _MacdComputation:
+    histogram: dict[datetime, float]
+    exact: bool
+    final_anchor: MacdAnchor | None
+    issue: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _InternalThirdPoint:
+    position: int
+    sublevel_zone_count: int
+
+
 def detect_trading_points(
     segments: Sequence[Segment],
     segment_central_zones: Sequence[SegmentCentralZone],
     *,
     raw_bars: Sequence[RawBar] = (),
     segment_evidence: Sequence[SegmentEvidence] = (),
+    segment_commit_times: Mapping[str, datetime] | None = None,
     strokes: Sequence[Stroke] = (),
+    macd_history_anchored: bool = False,
+    macd_anchor: MacdAnchor | None = None,
 ) -> TradingPointDetectionResult:
     """识别线段操作级别的一、二、三类买卖点。
 
     本实现明确区分操作级别与次级别：
 
     * 一买/一卖：操作级别必须已经形成至少两个严格同向、互不重叠的线段中枢，
-      最后中枢的进入线段与离开线段方向一致；离开线段创新极值，同时其同方向
-      MACD 柱面积小于进入线段，构成趋势背驰。
+      连接两中枢的同向走势 b 与最终离开走势 c 方向一致；c 内形成对最后中枢 B
+      的次级别三类点、至少包含两个次级别中枢、创出趋势新极值，并且同方向
+      MACD 柱面积小于 b。
     * 二买/二卖：操作级别一类点之后的第一次反向回试不破坏一类点极值，并且
       该回试线段的终点必须同时是其内部笔级别走势的一类买卖点。
     * 三买/三卖：一个已完成线段离开固定线段中枢，紧随其后的第一个反向线段
       回试不重新进入中枢；不跌破/不升破边界包含等价触碰。
 
-    只使用已经确认的线段。图上点位使用 ``dt``，后台通知必须使用
-    ``confirmed_at_dt``，避免未来函数。
+    只使用已经确认的线段。调用方必须提供覆盖全部输入线段的正式提交证据：
+    优先传 ``segment_evidence``，测试或外部持久化系统也可显式传入
+    ``segment_commit_times``。显式映射必须以 ``Segment.fingerprint`` 为键，
+    不能再用局部 ``segment_index``。缺少任一线段的 committed_at 时，接口安全关闭，
+    不会回退到线段端点时间输出 B1/B2/B3/S1/S2/S3。
+
+    图上点位使用 ``dt``，后台通知必须使用 ``confirmed_at_dt``，避免未来函数。
     """
     values = tuple(segments)
     zones = tuple(segment_central_zones)
-    bars = tuple(sorted(raw_bars or _raw_bars_from_segments(values), key=lambda x: x.open_time))
-    evidence_map = {x.segment_index: x for x in segment_evidence}
+    bars = tuple(raw_bars or _raw_bars_from_segments(values))
+    commit_times = _formal_segment_commit_times(
+        values,
+        segment_evidence=segment_evidence,
+        explicit=segment_commit_times,
+    )
+    missing_commit_indexes = tuple(x.index for x in values if x.index not in commit_times)
+    if missing_commit_indexes:
+        return TradingPointDetectionResult(
+            points=(),
+            candidates=(),
+            trend_divergences=(),
+            diagnostics=(
+                TradingPointDiagnostic(
+                    code="FORMAL_SEGMENT_COMMIT_EVIDENCE_MISSING",
+                    message=(
+                        "买卖点接口拒绝使用缺少正式提交证据的线段；缺失线段："
+                        + ", ".join(str(x) for x in missing_commit_indexes)
+                    ),
+                    dt=values[0].start_dt if values else None,
+                ),
+            ),
+        )
+    macd = _macd_histogram(
+        bars,
+        history_anchored=macd_history_anchored,
+        anchor=macd_anchor,
+    )
 
     segment_first = _detect_first_points_at_level(
         units=values,
         zones=zones,
-        raw_bars=bars,
+        macd=macd,
         level="segment",
         confirmation_fn=lambda pos: _segment_confirmation_dt(
-            values[pos].index, values, evidence_map, strokes
+            values[pos].index, commit_times
         ),
         segment_index_fn=lambda pos: values[pos].index,
     )
@@ -101,12 +152,20 @@ def detect_trading_points(
     points: list[TradingPoint] = list(segment_first.points)
     candidates: list[TradingPointCandidate] = list(segment_first.candidates)
     diagnostics: list[TradingPointDiagnostic] = []
+    if macd.issue is not None:
+        diagnostics.append(
+            TradingPointDiagnostic(
+                code="MACD_STREAM_NOT_EXACT",
+                message=macd.issue,
+                dt=bars[0].open_time if bars else None,
+            )
+        )
 
     for point in segment_first.points:
         diagnostics.append(
             TradingPointDiagnostic(
                 point.point_type.value,
-                f"{point.label}：两个同向线段中枢构成趋势，最后中枢离开段创新极值且 MACD 力度背驰",
+                f"{point.label}：严格 GG/DD 趋势成立，最终离开 c 内含次级别三类点和至少两个次级别中枢、创新极值且方向 MACD 力度背驰",
                 point.dt,
             )
         )
@@ -152,7 +211,7 @@ def detect_trading_points(
             price_ok = retrace.end_value <= first.price + _EPS
             lower_type = TradingPointType.SELL1
 
-        lower_result = _detect_local_stroke_first_points(retrace, bars)
+        lower_result = _detect_local_stroke_first_points(retrace, macd)
         lower = next(
             (
                 x
@@ -186,7 +245,7 @@ def detect_trading_points(
             continue
 
         confirmed_at = max(
-            _segment_confirmation_dt(retrace.index, values, evidence_map, strokes),
+            _segment_confirmation_dt(retrace.index, commit_times),
             lower.confirmed_at_dt,
         )
         point = TradingPoint(
@@ -281,7 +340,7 @@ def detect_trading_points(
         point = TradingPoint(
             symbol=pullback.symbol, point_type=expected, dt=pullback.end_dt,
             price=pullback.end_value, segment_index=pullback.index,
-            confirmed_at_dt=_segment_confirmation_dt(pullback.index, values, evidence_map, strokes),
+            confirmed_at_dt=_segment_confirmation_dt(pullback.index, commit_times),
             evidence_kind="ZONE_DEPARTURE_FIRST_RETEST",
             evidence=(("线段中枢", str(zone.index)), ("ZD", f"{zone.zd:.12g}"),
                       ("ZG", f"{zone.zg:.12g}"), ("离开线段", str(departure.index)),
@@ -333,13 +392,73 @@ def validate_trading_points(
     zones: Sequence[SegmentCentralZone],
     *,
     raw_bars: Sequence[RawBar] = (),
+    segment_evidence: Sequence[SegmentEvidence] = (),
+    segment_commit_times: Mapping[str, datetime] | None = None,
+    strokes: Sequence[Stroke] = (),
+    macd_history_anchored: bool = True,
+    macd_anchor: MacdAnchor | None = None,
 ) -> tuple[TradingPointDiagnostic, ...]:
-    """校验已确认买卖点的方向、端点、层级证据和中枢边界。"""
+    """校验已确认买卖点及其真实正式提交时间。
+
+    校验器与检测器使用同一份强绑定提交账本重新计算点位；不能只检查
+    ``confirmed_at_dt >= dt``，否则错误或篡改后的通知时间仍会通过。
+    """
     issues: list[TradingPointDiagnostic] = []
     values = tuple(segments)
     index_map = {x.index: x for x in values}
     zone_map = {x.index: x for x in zones}
+    try:
+        macd = _macd_histogram(
+            raw_bars or _raw_bars_from_segments(values),
+            history_anchored=macd_history_anchored,
+            anchor=macd_anchor,
+        )
+    except ValueError as exc:
+        macd = _MacdComputation({}, False, None, str(exc))
+        issues.append(
+            TradingPointDiagnostic(
+                "TRADING_POINT_MACD_STREAM_INVALID",
+                f"MACD 输入流或锚点无效：{exc}",
+                points[0].dt if points else (values[0].start_dt if values else None),
+            )
+        )
     seen: set[tuple[TradingPointType, datetime, int]] = set()
+
+    expected_points: dict[tuple[TradingPointType, datetime, int], TradingPoint] = {}
+    try:
+        recalculated = detect_trading_points(
+            values,
+            zones,
+            raw_bars=raw_bars,
+            segment_evidence=segment_evidence,
+            segment_commit_times=segment_commit_times,
+            strokes=strokes,
+            macd_history_anchored=macd_history_anchored,
+            macd_anchor=macd_anchor,
+        )
+    except (TypeError, ValueError) as exc:
+        recalculated = None
+        issues.append(
+            TradingPointDiagnostic(
+                "TRADING_POINT_FORMAL_RECALCULATION_FAILED",
+                f"无法使用正式结构、提交账本和 MACD 状态复算买卖点：{exc}",
+                points[0].dt if points else (values[0].start_dt if values else None),
+            )
+        )
+    else:
+        expected_points = {
+            (item.point_type, item.dt, item.segment_index): item
+            for item in recalculated.points
+        }
+        for diagnostic in recalculated.diagnostics:
+            if diagnostic.code == "FORMAL_SEGMENT_COMMIT_EVIDENCE_MISSING":
+                issues.append(
+                    TradingPointDiagnostic(
+                        "TRADING_POINT_COMMIT_EVIDENCE_INVALID",
+                        diagnostic.message,
+                        diagnostic.dt,
+                    )
+                )
 
     for point in points:
         key = (point.point_type, point.dt, point.segment_index)
@@ -357,16 +476,135 @@ def validate_trading_points(
             issues.append(TradingPointDiagnostic("TRADING_POINT_DIRECTION_INVALID", f"{point.label} 的线段方向错误", point.dt))
         if point.confirmed_at_dt < point.dt:
             issues.append(TradingPointDiagnostic("TRADING_POINT_FUTURE_TIME_INVALID", f"{point.label} 的确认时间早于结构时间", point.dt))
+        expected_point = expected_points.get(key)
+        if recalculated is not None:
+            if expected_point is None:
+                issues.append(
+                    TradingPointDiagnostic(
+                        "TRADING_POINT_NOT_IN_FORMAL_RECALCULATION",
+                        f"{point.label} 无法由当前正式线段账本重新计算得到",
+                        point.dt,
+                    )
+                )
+            elif point.confirmed_at_dt != expected_point.confirmed_at_dt:
+                issues.append(
+                    TradingPointDiagnostic(
+                        "TRADING_POINT_CONFIRM_TIME_MISMATCH",
+                        (
+                            f"{point.label} 的确认时间不等于正式提交账本复算时间："
+                            f"{point.confirmed_at_dt.isoformat()} != "
+                            f"{expected_point.confirmed_at_dt.isoformat()}"
+                        ),
+                        point.dt,
+                    )
+                )
 
         if point.point_type in {TradingPointType.BUY1, TradingPointType.SELL1}:
             ev = point.evidence_dict
-            if ev.get("趋势中枢数") != "2":
-                issues.append(TradingPointDiagnostic("BS1_TREND_INVALID", f"{point.label} 没有两个严格同向中枢", point.dt))
+            if point.evidence_kind != "STRICT_TREND_DIRECTIONAL_MACD_DIVERGENCE":
+                issues.append(TradingPointDiagnostic(
+                    "BS1_EVIDENCE_KIND_INVALID",
+                    f"{point.label} 不是严格趋势方向 MACD 背驰证据",
+                    point.dt,
+                ))
+            if ev.get("趋势中枢数") != "2" or ev.get("MACD状态") != "精确":
+                issues.append(TradingPointDiagnostic("BS1_TREND_INVALID", f"{point.label} 缺少严格趋势或精确 MACD 状态", point.dt))
             try:
-                if float(ev.get("离开MACD面积", "nan")) >= float(ev.get("进入MACD面积", "nan")) - _EPS:
-                    issues.append(TradingPointDiagnostic("BS1_MACD_DIVERGENCE_INVALID", f"{point.label} MACD 力度未减弱", point.dt))
-            except ValueError:
-                issues.append(TradingPointDiagnostic("BS1_MACD_EVIDENCE_INVALID", f"{point.label} MACD 证据不可解析", point.dt))
+                previous_gg = float(ev["前中枢GG"])
+                previous_dd = float(ev["前中枢DD"])
+                last_gg = float(ev["后中枢GG"])
+                last_dd = float(ev["后中枢DD"])
+                entry_area = float(ev["进入MACD面积"])
+                exit_area = float(ev["离开MACD面积"])
+            except (KeyError, ValueError):
+                issues.append(TradingPointDiagnostic("BS1_EVIDENCE_INVALID", f"{point.label} 严格趋势或 MACD 证据不可解析", point.dt))
+            else:
+                strict = (
+                    last_gg < previous_dd - _EPS
+                    if point.point_type is TradingPointType.BUY1
+                    else last_dd > previous_gg + _EPS
+                )
+                if not strict:
+                    issues.append(TradingPointDiagnostic("BS1_STRICT_TREND_INVALID", f"{point.label} 不满足 GG/DD 严格趋势关系", point.dt))
+                if entry_area <= _EPS or exit_area >= entry_area - _EPS:
+                    issues.append(TradingPointDiagnostic("BS1_MACD_DIVERGENCE_INVALID", f"{point.label} 同方向 MACD 柱面积未减弱", point.dt))
+
+                try:
+                    previous_zone_index = int(ev["前中枢"])
+                    last_zone_index = int(ev["最后中枢"])
+                    entry_index = int(ev.get("比较单元b", ev.get("进入单元A", "")))
+                    exit_index = int(ev.get("离开单元c", ev.get("离开单元C", "")))
+                except (KeyError, ValueError):
+                    issues.append(TradingPointDiagnostic("BS1_ABC_EVIDENCE_INVALID", f"{point.label} a+A+b+B+c 证据不可解析", point.dt))
+                else:
+                    last_zone = zone_map.get(last_zone_index)
+                    entry_pos = _position_by_index(values, entry_index)
+                    exit_pos = _position_by_index(values, exit_index)
+                    if last_zone is None or entry_pos is None or exit_pos is None:
+                        issues.append(TradingPointDiagnostic("BS1_ABC_STRUCTURE_MISSING", f"{point.label} a+A+b+B+c 结构不存在", point.dt))
+                    else:
+                        views = {x.index: x for x in _zone_views(zones, values)}
+                        previous_view = views.get(previous_zone_index)
+                        last_view = views.get(last_zone_index)
+                        direction = StrokeDirection.DOWN if point.point_type is TradingPointType.BUY1 else StrokeDirection.UP
+                        if previous_view is None or last_view is None:
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_ZONE_VIEW_MISSING",
+                                f"{point.label} 的前后中枢无法按趋势本体重新计算",
+                                point.dt,
+                            ))
+                            continue
+                        expected_entry_pos = _find_entry_position(values, previous_view, last_view, direction)
+                        expected_exit_pos = _find_exit_position(values, last_view, direction)
+                        if expected_entry_pos != entry_pos or expected_exit_pos != exit_pos:
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_BC_POSITION_INVALID",
+                                f"{point.label} 的 b/c 不是按前后中枢重新计算得到的连接段与最终离开段",
+                                point.dt,
+                            ))
+                        internal = _internal_zone_third_point(values[exit_pos], last_view, direction)
+                        if (
+                            exit_pos != last_view.end
+                            or internal is None
+                            or internal.sublevel_zone_count < 2
+                        ):
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_C_NOT_COMPLETE",
+                                f"{point.label} 的 c 不是最后中枢最终离开段，或 c 内缺少次级别三类点/两个次级别中枢",
+                                point.dt,
+                            ))
+                        actual_entry_area = _directional_macd_area(values[entry_pos], direction, macd.histogram)
+                        actual_exit_area = _directional_macd_area(values[exit_pos], direction, macd.histogram)
+                        if not macd.exact:
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_MACD_STATE_NOT_EXACT",
+                                f"{point.label} 无法由真实历史起点或 MacdAnchor 精确复算 MACD",
+                                point.dt,
+                            ))
+                        if (
+                            abs(actual_entry_area - entry_area) > 1e-8
+                            or abs(actual_exit_area - exit_area) > 1e-8
+                        ):
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_MACD_EVIDENCE_MISMATCH",
+                                f"{point.label} 保存的 b/c MACD 面积与原始 K 复算结果不一致",
+                                point.dt,
+                            ))
+                        if actual_entry_area <= _EPS or actual_exit_area >= actual_entry_area - _EPS:
+                            issues.append(TradingPointDiagnostic(
+                                "BS1_MACD_RECOMPUTED_INVALID",
+                                f"{point.label} 按原始 K 重算后不满足同方向 MACD 柱面积背驰",
+                                point.dt,
+                            ))
+                        prior = values[entry_pos:exit_pos]
+                        if prior:
+                            extreme = (
+                                values[exit_pos].end_value < min(x.low for x in prior) - _EPS
+                                if direction is StrokeDirection.DOWN
+                                else values[exit_pos].end_value > max(x.high for x in prior) + _EPS
+                            )
+                            if not extreme:
+                                issues.append(TradingPointDiagnostic("BS1_PRICE_EXTREME_INVALID", f"{point.label} 的 c 未创趋势新极值", point.dt))
 
         if point.point_type in {TradingPointType.BUY2, TradingPointType.SELL2}:
             if point.evidence_kind != "SUBLEVEL_BS1_ON_FIRST_RETRACE":
@@ -377,7 +615,7 @@ def validate_trading_points(
                     if point.point_type is TradingPointType.BUY2
                     else TradingPointType.SELL1
                 )
-                lower_result = _detect_local_stroke_first_points(segment, raw_bars)
+                lower_result = _detect_local_stroke_first_points(segment, macd)
                 lower_ok = any(
                     x.point_type is expected_lower
                     and x.dt == point.dt
@@ -409,34 +647,67 @@ def _detect_first_points_at_level(
     *,
     units: Sequence[Any],
     zones: Sequence[Any],
-    raw_bars: Sequence[RawBar],
+    macd: _MacdComputation,
     level: str,
     confirmation_fn: Callable[[int], datetime],
     segment_index_fn: Callable[[int], int],
 ) -> _FirstPointLevelResult:
+    """识别严格趋势背驰形成的一类买卖点。
+
+    这里严格区分两种情况：
+
+    * ``后 GG < 前 DD`` / ``后 DD > 前 GG``：同级别下跌/上涨趋势；
+    * 只有核心区 ``ZG/ZD`` 分离、但 ``GG/DD`` 仍重叠：形成更高级别中枢，
+      不是标准趋势背驰，不能输出一买/一卖。
+
+    MACD 只比较走势方向对应的柱体：下跌只累计绿柱（负柱），上涨只累计
+    红柱（正柱）。有限窗口若没有真实历史起点或持久化 ``MacdAnchor``，
+    EMA 状态不可精确恢复，只输出待确认候选，不输出正式点。
+    """
     values = tuple(units)
     zone_views = _zone_views(zones, values)
-    macd = _macd_histogram(raw_bars)
     points: list[TradingPoint] = []
     candidates: list[TradingPointCandidate] = []
     divergences: list[TrendDivergence] = []
 
     for previous, last in zip(zone_views, zone_views[1:]):
-        # 当前中枢对象会把离开段纳入时间延伸，GG/DD 因而可能包含
-        # 离开段极值。趋势关系应比较两个固定核心区间，而不是扩展后的
-        # 全部波动范围：后中枢核心完全低于前中枢为下跌，反之为上涨。
-        if last.zg < previous.zd - _EPS:
+        strict_down = last.gg < previous.dd - _EPS
+        strict_up = last.dd > previous.gg + _EPS
+        core_down = last.zg < previous.zd - _EPS
+        core_up = last.zd > previous.zg + _EPS
+
+        if strict_down:
             direction = StrokeDirection.DOWN
             point_type = TradingPointType.BUY1
-        elif last.zd > previous.zg + _EPS:
+        elif strict_up:
             direction = StrokeDirection.UP
             point_type = TradingPointType.SELL1
         else:
+            if core_down or core_up:
+                point_type = TradingPointType.BUY1 if core_down else TradingPointType.SELL1
+                candidates.append(
+                    TradingPointCandidate(
+                        point_type,
+                        TradingPointStatus.REJECTED,
+                        None,
+                        None,
+                        None,
+                        "中枢核心区虽已分离，但 GG/DD 波动区间仍重叠；属于更高级别中枢，不是严格趋势",
+                        (
+                            ("前中枢GG", f"{previous.gg:.12g}"),
+                            ("前中枢DD", f"{previous.dd:.12g}"),
+                            ("后中枢GG", f"{last.gg:.12g}"),
+                            ("后中枢DD", f"{last.dd:.12g}"),
+                            ("严格趋势", "失败"),
+                        ),
+                        zone_index=last.index,
+                    )
+                )
             continue
 
         entry_pos = _find_entry_position(values, previous, last, direction)
         exit_pos = _find_exit_position(values, last, direction)
-        if entry_pos is None or exit_pos is None:
+        if entry_pos is None or exit_pos is None or exit_pos <= entry_pos:
             candidates.append(
                 TradingPointCandidate(
                     point_type,
@@ -444,12 +715,13 @@ def _detect_first_points_at_level(
                     None,
                     None,
                     None,
-                    "趋势中枢已成立，但最后中枢的进入段或离开段尚未完整确认",
+                    "严格趋势已成立，但连接段 b 或最终离开走势 c 尚未完整确认",
                     (
                         ("前中枢", str(previous.index)),
                         ("后中枢", str(last.index)),
-                        ("进入段", str(entry_pos)),
-                        ("离开段", str(exit_pos)),
+                        ("比较段b", str(entry_pos)),
+                        ("离开段c", str(exit_pos)),
+                        ("严格趋势", "通过"),
                     ),
                     zone_index=last.index,
                 )
@@ -458,12 +730,24 @@ def _detect_first_points_at_level(
 
         entry = values[entry_pos]
         exit_ = values[exit_pos]
-        entry_area = _directional_macd_area(entry, direction, macd)
-        exit_area = _directional_macd_area(exit_, direction, macd)
+        internal_third = _internal_zone_third_point(exit_, last, direction)
+        sublevel_zone_count = (
+            internal_third.sublevel_zone_count if internal_third is not None else 0
+        )
+        sublevel_third_point = (
+            internal_third is not None and sublevel_zone_count >= 2
+        ) or level == "stroke"
+        entry_area = _directional_macd_area(entry, direction, macd.histogram)
+        exit_area = _directional_macd_area(exit_, direction, macd.histogram)
+
+        prior_units = values[entry_pos:exit_pos]
         if direction is StrokeDirection.DOWN:
-            extreme = exit_.end_value < entry.end_value - _EPS
+            previous_extreme = min(float(x.low) for x in prior_units)
+            extreme = exit_.end_value < previous_extreme - _EPS
         else:
-            extreme = exit_.end_value > entry.end_value + _EPS
+            previous_extreme = max(float(x.high) for x in prior_units)
+            extreme = exit_.end_value > previous_extreme + _EPS
+
         divergence = entry_area > _EPS and exit_area < entry_area - _EPS
         trend = TrendDivergence(
             symbol=exit_.symbol,
@@ -483,18 +767,45 @@ def _detect_first_points_at_level(
             exit_end_dt=exit_.end_dt,
             price_extreme=extreme,
             macd_divergence=divergence,
+            macd_state_exact=macd.exact,
+            strict_trend=True,
+            sublevel_third_point=sublevel_third_point,
+            sublevel_zone_count=sublevel_zone_count,
         )
         divergences.append(trend)
         checks = (
-            ("严格同向中枢", "通过"),
-            ("进入离开同向", "通过"),
-            ("离开段创新极值", "通过" if extreme else "失败"),
-            ("MACD柱面积背驰", "通过" if divergence else "失败"),
-            ("进入MACD面积", f"{entry_area:.12g}"),
-            ("离开MACD面积", f"{exit_area:.12g}"),
+            ("严格趋势GG/DD", "通过"),
+            ("前中枢GG/DD", f"{previous.gg:.12g}/{previous.dd:.12g}"),
+            ("后中枢GG/DD", f"{last.gg:.12g}/{last.dd:.12g}"),
+            ("b/c同向", "通过"),
+            ("c内次级别三类点", "通过" if internal_third is not None else "失败"),
+            ("c内次级别中枢数", str(sublevel_zone_count)),
+            ("c次级别结构完整", "通过" if sublevel_third_point else "失败"),
+            ("c创趋势新极值", "通过" if extreme else "失败"),
+            ("MACD状态精确", "通过" if macd.exact else "失败"),
+            ("方向MACD柱面积背驰", "通过" if divergence else "失败"),
+            ("b方向MACD面积", f"{entry_area:.12g}"),
+            ("c方向MACD面积", f"{exit_area:.12g}"),
         )
         segment_index = segment_index_fn(exit_pos)
-        if not trend.is_valid:
+
+        if not sublevel_third_point:
+            candidates.append(
+                TradingPointCandidate(
+                    point_type,
+                    TradingPointStatus.PENDING,
+                    exit_.end_dt,
+                    exit_.end_value,
+                    segment_index,
+                    "最终离开 c 尚未同时满足：内部形成对最后中枢 B 的次级别三类点，且至少包含两个次级别中枢",
+                    checks,
+                    zone_index=last.index,
+                    related_segment_indexes=(entry.index, exit_.index),
+                )
+            )
+            continue
+
+        if not extreme:
             candidates.append(
                 TradingPointCandidate(
                     point_type,
@@ -502,7 +813,39 @@ def _detect_first_points_at_level(
                     exit_.end_dt,
                     exit_.end_value,
                     segment_index,
-                    "趋势结构成立，但离开段未同时满足创新极值与 MACD 力度背驰",
+                    "严格趋势成立，但最终离开 c 没有创出该趋势新极值",
+                    checks,
+                    zone_index=last.index,
+                    related_segment_indexes=(entry.index, exit_.index),
+                )
+            )
+            continue
+
+        if not macd.exact:
+            candidates.append(
+                TradingPointCandidate(
+                    point_type,
+                    TradingPointStatus.PENDING,
+                    exit_.end_dt,
+                    exit_.end_value,
+                    segment_index,
+                    "严格趋势与价格新极值成立，但有限窗口缺少精确 MACD 递推状态；需真实历史起点或 MacdAnchor",
+                    checks,
+                    zone_index=last.index,
+                    related_segment_indexes=(entry.index, exit_.index),
+                )
+            )
+            continue
+
+        if not divergence:
+            candidates.append(
+                TradingPointCandidate(
+                    point_type,
+                    TradingPointStatus.REJECTED,
+                    exit_.end_dt,
+                    exit_.end_value,
+                    segment_index,
+                    "严格趋势和价格新极值成立，但 c 的同方向 MACD 柱面积没有小于 b",
                     checks,
                     zone_index=last.index,
                     related_segment_indexes=(entry.index, exit_.index),
@@ -517,16 +860,27 @@ def _detect_first_points_at_level(
             price=exit_.end_value,
             segment_index=segment_index,
             confirmed_at_dt=confirmation_fn(exit_pos),
-            evidence_kind="TREND_MACD_DIVERGENCE",
+            evidence_kind="STRICT_TREND_DIRECTIONAL_MACD_DIVERGENCE",
             evidence=(
                 ("级别", level),
                 ("趋势中枢数", "2"),
+                ("严格趋势规则", "后GG<前DD" if direction is StrokeDirection.DOWN else "后DD>前GG"),
                 ("前中枢", str(previous.index)),
                 ("最后中枢", str(last.index)),
-                ("进入单元", str(entry.index)),
-                ("离开单元", str(exit_.index)),
+                ("前中枢GG", f"{previous.gg:.12g}"),
+                ("前中枢DD", f"{previous.dd:.12g}"),
+                ("后中枢GG", f"{last.gg:.12g}"),
+                ("后中枢DD", f"{last.dd:.12g}"),
+                ("比较单元b", str(entry.index)),
+                ("离开单元c", str(exit_.index)),
+                ("c内次级别三类点", str(internal_third.position) if internal_third is not None else "最低建模级别"),
+                ("c内次级别中枢数", str(sublevel_zone_count)),
+                ("MACD面积方向", "负柱" if direction is StrokeDirection.DOWN else "正柱"),
+                ("b方向MACD面积", f"{entry_area:.12g}"),
+                ("c方向MACD面积", f"{exit_area:.12g}"),
                 ("进入MACD面积", f"{entry_area:.12g}"),
                 ("离开MACD面积", f"{exit_area:.12g}"),
+                ("MACD状态", "精确"),
                 ("进入价格力度", f"{entry.power:.12g}"),
                 ("离开价格力度", f"{exit_.power:.12g}"),
             ),
@@ -542,7 +896,7 @@ def _detect_first_points_at_level(
                 point.dt,
                 point.price,
                 segment_index,
-                "两个严格同向中枢构成趋势，离开段创新极值且 MACD 柱面积背驰",
+                "两个同级别中枢满足严格 GG/DD 趋势关系，c 内含次级别三类点和至少两个次级别中枢、创新极值且同方向 MACD 柱面积小于 b",
                 checks,
                 zone_index=last.index,
                 related_segment_indexes=(entry.index, exit_.index),
@@ -553,7 +907,7 @@ def _detect_first_points_at_level(
 
 
 def _detect_local_stroke_first_points(
-    segment: Segment, raw_bars: Sequence[RawBar]
+    segment: Segment, macd: _MacdComputation
 ) -> _FirstPointLevelResult:
     local = tuple(segment.strokes)
     if len(local) < 5:
@@ -564,7 +918,7 @@ def _detect_local_stroke_first_points(
     return _detect_first_points_at_level(
         units=local,
         zones=zones,
-        raw_bars=raw_bars,
+        macd=macd,
         level="stroke",
         confirmation_fn=lambda pos: local[pos].fx_b.source_end,
         segment_index_fn=lambda pos: segment.index,
@@ -587,6 +941,13 @@ def _zone_views(zones: Sequence[Any], units: Sequence[Any]) -> tuple[_ZoneView, 
             end = identity.get(id(last), by_index.get(last.index, -1))
         if start < 0 or end < start:
             continue
+        trend_members = (
+            getattr(zone, "trend_segments", None)
+            or getattr(zone, "trend_strokes", None)
+            or members
+        )
+        if len(trend_members) < 3:
+            continue
         result.append(
             _ZoneView(
                 index=int(getattr(zone, "index", i) if getattr(zone, "index", -1) >= 0 else i),
@@ -594,8 +955,8 @@ def _zone_views(zones: Sequence[Any], units: Sequence[Any]) -> tuple[_ZoneView, 
                 end=end,
                 zg=float(zone.zg),
                 zd=float(zone.zd),
-                gg=float(zone.gg),
-                dd=float(zone.dd),
+                gg=max(float(x.high) for x in trend_members),
+                dd=min(float(x.low) for x in trend_members),
             )
         )
     return tuple(result)
@@ -622,55 +983,190 @@ def _find_entry_position(
 def _find_exit_position(
     units: Sequence[Any], zone: _ZoneView, direction: StrokeDirection
 ) -> int | None:
-    start = max(0, zone.start + 2)
-    stop = min(len(units) - 1, zone.end + 1)
-    for pos in range(start, stop + 1):
-        unit = units[pos]
-        if unit.direction is not direction:
-            continue
+    pos = zone.end
+    if pos < 0 or pos >= len(units):
+        return None
+    unit = units[pos]
+    if unit.direction is not direction:
+        return None
+    if direction is StrokeDirection.DOWN:
+        return pos if unit.start_value >= zone.zd - _EPS and unit.end_value < zone.zd - _EPS else None
+    return pos if unit.start_value <= zone.zg + _EPS and unit.end_value > zone.zg + _EPS else None
+
+
+def _internal_zone_third_point(
+    unit: Any, zone: _ZoneView, direction: StrokeDirection
+) -> _InternalThirdPoint | None:
+    """返回 c 内部对最后中枢 B 形成的次级别三类点及中枢数量。"""
+    lower_units = tuple(getattr(unit, "strokes", ()))
+    if len(lower_units) < 3:
+        return None
+    zone_count = len(detect_central_zones(lower_units).zones)
+    for pos in range(len(lower_units) - 2):
+        departure, pullback, continuation = lower_units[pos : pos + 3]
         if direction is StrokeDirection.DOWN:
-            if unit.start_value >= zone.zd - _EPS and unit.end_value < zone.zd - _EPS:
-                return pos
+            valid = (
+                departure.direction is StrokeDirection.DOWN
+                and departure.end_value < zone.zd - _EPS
+                and pullback.direction is StrokeDirection.UP
+                and pullback.high <= zone.zd + _EPS
+                and continuation.direction is StrokeDirection.DOWN
+                and continuation.end_value < pullback.start_value - _EPS
+            )
         else:
-            if unit.start_value <= zone.zg + _EPS and unit.end_value > zone.zg + _EPS:
-                return pos
+            valid = (
+                departure.direction is StrokeDirection.UP
+                and departure.end_value > zone.zg + _EPS
+                and pullback.direction is StrokeDirection.DOWN
+                and pullback.low >= zone.zg - _EPS
+                and continuation.direction is StrokeDirection.UP
+                and continuation.end_value > pullback.start_value + _EPS
+            )
+        if valid:
+            return _InternalThirdPoint(
+                position=int(getattr(pullback, "index", pos + 1)),
+                sublevel_zone_count=zone_count,
+            )
     return None
 
 
-def _macd_histogram(raw_bars: Sequence[RawBar]) -> dict[datetime, float]:
-    bars = tuple(sorted(raw_bars, key=lambda x: x.open_time))
+def build_macd_anchor(
+    raw_bars: Sequence[RawBar],
+    *,
+    anchor: MacdAnchor | None = None,
+) -> MacdAnchor:
+    """递推并返回最后一根 K 收盘后的 MACD 状态。"""
+    computation = _macd_histogram(
+        raw_bars,
+        history_anchored=anchor is None,
+        anchor=anchor,
+    )
+    if computation.final_anchor is None:
+        raise ValueError("至少需要一根 K 线才能生成 MacdAnchor")
+    if not computation.exact:
+        raise ValueError(
+            "输入 K 线不是同品种、同周期且连续的精确序列，不能生成可用于正式买卖点的 MacdAnchor"
+        )
+    return computation.final_anchor
+
+
+def _macd_histogram(
+    raw_bars: Sequence[RawBar],
+    *,
+    history_anchored: bool,
+    anchor: MacdAnchor | None,
+) -> _MacdComputation:
+    bars = tuple(raw_bars)
     if not bars:
-        return {}
-    closes = [float(x.close) for x in bars]
-    ema12 = _ema(closes, 12)
-    ema26 = _ema(closes, 26)
-    dif = [a - b for a, b in zip(ema12, ema26)]
-    dea = _ema(dif, 9)
-    hist = [2.0 * (a - b) for a, b in zip(dif, dea)]
-    return {bar.open_time: value for bar, value in zip(bars, hist)}
+        return _MacdComputation(
+            {},
+            bool(history_anchored) if anchor is None else bool(anchor.exact),
+            anchor,
+        )
 
+    stream = validate_bar_stream(bars)
+    if anchor is not None:
+        if stream.symbol != anchor.symbol:
+            raise ValueError(
+                f"MacdAnchor 品种不匹配：{anchor.symbol} != {stream.symbol}"
+            )
+        if stream.interval != anchor.interval:
+            raise ValueError(
+                f"MacdAnchor 周期不匹配：{anchor.interval} != {stream.interval}"
+            )
+        expected_from_cursor = next_open_time(anchor.last_open_time, anchor.interval)
+        if anchor.expected_next_open_time != expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 游标与周期不一致："
+                f"last_open_time={anchor.last_open_time.isoformat()}，"
+                f"周期 {anchor.interval} 的下一根应为 {expected_from_cursor.isoformat()}，"
+                f"锚点却声明 {anchor.expected_next_open_time.isoformat()}"
+            )
+        if anchor.last_close_time > expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 收盘时间越过下一周期起点："
+                f"last_close_time={anchor.last_close_time.isoformat()}，"
+                f"下一根应从 {expected_from_cursor.isoformat()} 开始"
+            )
+        if bars[0].open_time != anchor.expected_next_open_time:
+            raise ValueError(
+                "MacdAnchor 与输入窗口不连续："
+                f"锚点要求下一根为 {anchor.expected_next_open_time.isoformat()}，"
+                f"实际首根为 {bars[0].open_time.isoformat()}"
+            )
+        if not stream.continuous:
+            raise ValueError(
+                "MacdAnchor 后的输入 K 线存在断档，无法精确续算 MACD："
+                f"{stream.issue}"
+            )
 
-def _ema(values: Sequence[float], span: int) -> list[float]:
-    if not values:
-        return []
-    alpha = 2.0 / (span + 1.0)
-    result = [float(values[0])]
-    for value in values[1:]:
-        result.append(alpha * float(value) + (1.0 - alpha) * result[-1])
-    return result
+    alpha_fast = 2.0 / 13.0
+    alpha_slow = 2.0 / 27.0
+    alpha_signal = 2.0 / 10.0
+    histogram: dict[datetime, float] = {}
+
+    if anchor is None:
+        first = bars[0]
+        ema_fast = float(first.close)
+        ema_slow = float(first.close)
+        dea = 0.0
+        histogram[first.open_time] = 0.0
+        remaining = bars[1:]
+        exact = bool(history_anchored and stream.continuous)
+        issue = None if exact else (
+            stream.issue
+            or "有限窗口未声明为真实历史起点，MACD 初始 EMA 状态不可精确恢复"
+        )
+        history_start_open_time = first.open_time if exact else None
+        processed_bar_count = len(bars)
+    else:
+        ema_fast = float(anchor.ema_fast)
+        ema_slow = float(anchor.ema_slow)
+        dea = float(anchor.dea)
+        remaining = bars
+        exact = bool(anchor.exact)
+        issue = None if exact else "传入的 MacdAnchor 本身不是精确状态"
+        history_start_open_time = anchor.history_start_open_time
+        processed_bar_count = anchor.processed_bar_count + len(bars)
+
+    for bar in remaining:
+        close = float(bar.close)
+        ema_fast = alpha_fast * close + (1.0 - alpha_fast) * ema_fast
+        ema_slow = alpha_slow * close + (1.0 - alpha_slow) * ema_slow
+        dif = ema_fast - ema_slow
+        dea = alpha_signal * dif + (1.0 - alpha_signal) * dea
+        histogram[bar.open_time] = 2.0 * (dif - dea)
+
+    last = bars[-1]
+    final = MacdAnchor(
+        symbol=last.symbol,
+        interval=last.interval,
+        asof=bars[-1].close_time,
+        last_open_time=last.open_time,
+        last_close_time=last.close_time,
+        expected_next_open_time=next_open_time(last.open_time, last.interval),
+        last_bar_fingerprint=raw_bar_fingerprint(last),
+        ema_fast=ema_fast,
+        ema_slow=ema_slow,
+        dea=dea,
+        exact=exact,
+        history_start_open_time=history_start_open_time,
+        processed_bar_count=processed_bar_count,
+    )
+    return _MacdComputation(histogram, exact, final, issue)
 
 
 def _directional_macd_area(
     unit: Any, direction: StrokeDirection, macd: dict[datetime, float]
 ) -> float:
-    values = [
+    values = (
         value
         for dt, value in macd.items()
         if unit.source_start <= dt <= unit.source_end
-    ]
-    # MACD 在短走势刚切换时可能仍位于零轴另一侧；背驰比较采用该走势
-    # 时间区间内柱体绝对面积，避免仅因零轴滞后把力度误记为 0。
-    return float(sum(abs(x) for x in values))
+    )
+    if direction is StrokeDirection.DOWN:
+        return float(sum(-value for value in values if value < 0.0))
+    return float(sum(value for value in values if value > 0.0))
 
 
 def _raw_bars_from_segments(segments: Sequence[Segment]) -> tuple[RawBar, ...]:
@@ -690,14 +1186,68 @@ def _position_by_index(segments: Sequence[Segment], index: int) -> int | None:
     return None
 
 
+def _formal_segment_commit_times(
+    segments: Sequence[Segment],
+    *,
+    segment_evidence: Sequence[SegmentEvidence],
+    explicit: Mapping[str, datetime] | None,
+) -> dict[int, datetime]:
+    by_index = {x.index: x for x in segments}
+    by_fingerprint: dict[str, Segment] = {}
+    for segment in segments:
+        fingerprint = segment.fingerprint
+        if fingerprint in by_fingerprint:
+            raise ValueError("输入线段链存在重复结构指纹，无法安全匹配提交证据")
+        by_fingerprint[fingerprint] = segment
+
+    result: dict[int, datetime] = {}
+    for item in segment_evidence:
+        if item.committed_at is None:
+            continue
+        segment = by_index.get(item.segment_index)
+        if segment is None:
+            raise ValueError(f"SegmentEvidence 包含未知线段索引：{item.segment_index}")
+        if not item.matches_segment(segment):
+            raise ValueError(
+                f"线段 {item.segment_index} 的 SegmentEvidence 与品种/周期/几何指纹不匹配"
+            )
+        previous = result.get(segment.index)
+        if previous is not None and previous != item.committed_at:
+            raise ValueError(f"线段 {segment.index} 存在冲突的 committed_at")
+        result[segment.index] = item.committed_at
+
+    for fingerprint, committed_at in (explicit or {}).items():
+        if not isinstance(fingerprint, str):
+            raise TypeError(
+                "segment_commit_times 必须以 Segment.fingerprint 字符串为键；"
+                "不再接受 segment_index"
+            )
+        if not isinstance(committed_at, datetime):
+            raise TypeError("segment_commit_times 的值必须是 datetime")
+        segment = by_fingerprint.get(fingerprint)
+        if segment is None:
+            raise ValueError("segment_commit_times 包含不属于当前线段链的结构指纹")
+        previous = result.get(segment.index)
+        if previous is not None and previous != committed_at:
+            raise ValueError(f"线段 {segment.index} 的显式提交时间与 SegmentEvidence 冲突")
+        result[segment.index] = committed_at
+
+    for index, committed_at in result.items():
+        segment = by_index[index]
+        available_at = max(segment.end_dt, segment.source_end)
+        if committed_at < available_at:
+            raise ValueError(
+                f"线段 {index} 的 committed_at 早于结构可用时间："
+                f"{committed_at.isoformat()} < {available_at.isoformat()}"
+            )
+    return result
+
+
 def _segment_confirmation_dt(
     segment_index: int,
-    segments: Sequence[Segment],
-    evidence_map: dict[int, SegmentEvidence],
-    strokes: Sequence[Stroke],
+    commit_times: Mapping[int, datetime],
 ) -> datetime:
-    evidence = evidence_map.get(segment_index)
-    if evidence is not None and 0 <= evidence.confirmed_at_position < len(strokes):
-        return strokes[evidence.confirmed_at_position].end_dt
-    segment = next(x for x in segments if x.index == segment_index)
-    return segment.fx_b.source_end
+    try:
+        return commit_times[segment_index]
+    except KeyError as exc:  # pragma: no cover - 入口已统一校验覆盖率
+        raise ValueError(f"线段 {segment_index} 缺少正式 committed_at") from exc

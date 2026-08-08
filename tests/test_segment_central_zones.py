@@ -156,36 +156,46 @@ def test_real_snapshot_has_one_segment_zone_and_matches_reference() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars, min_bi_len=6)
+    result = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
 
-    assert len(result.segments) == 4
-    assert len(result.segment_central_zones) == 1
-    zone = result.segment_central_zones[0]
-    assert [x.index for x in zone.segments] == [0, 1, 2, 3]
-    assert (zone.zd, zone.zg) == (7816.01, 8333.0)
+    # 冻结样本显式声明从可信历史起点开始；第三条仍处于右侧 provisional。
+    assert len(result.unresolved_prefix_segments) == 0
+    assert len(result.segments) == 2
+    assert len(result.provisional_segments) == 1
+    assert len(result.segment_central_zones) == 0
+
+    # 当前完整检测链仍保留旧几何结果作为候选和算法审计。
+    assert len(result.detected_segments) == 3
+    assert len(result.detected_segment_central_zones) == 1
+    zone = result.detected_segment_central_zones[0]
+    assert [x.index for x in zone.segments] == [0, 1, 2]
+    assert (zone.zd, zone.zg) == (7917.0, 8124.92)
     comparison = compare_segment_central_zones_with_reference(
-        result.segment_central_zones,
-        result.segment_central_zone_candidates,
-        result.segments,
+        result.detected_segment_central_zones,
+        (),
+        result.detected_segments,
     )
-    assert comparison.all_match
-    assert validate_segment_central_zones(result.segment_central_zones, result.segments) == ()
+    assert comparison.zones_match
+    assert validate_segment_central_zones(
+        result.detected_segment_central_zones,
+        result.detected_segments,
+    ) == ()
 
 
 def test_batch_and_incremental_results_include_identical_segment_zones() -> None:
     bars = demo_bars(260)
-    expected = analyze_bars(bars)
-    actual = FractalEngine().extend(bars)
+    expected = analyze_bars(bars, left_boundary_anchored=True)
+    actual = FractalEngine(left_boundary_anchored=True).extend(bars)
     assert actual.segment_central_zones == expected.segment_central_zones
     assert actual.segment_central_zone_candidates == expected.segment_central_zone_candidates
     assert actual.segment_central_zone_diagnostics == expected.segment_central_zone_diagnostics
 
 
 def test_chart_draws_light_orange_rectangle_per_segment_zone() -> None:
-    root = Path(__file__).resolve().parents[1]
-    path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
-    bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars)
+    result = analyze_bars(
+        demo_bars(1000, symbol="BTCUSDT", interval="5m"),
+        left_boundary_anchored=True,
+    )
     figure = build_raw_chart(result)
 
     orange = [x for x in figure.layout.shapes if x.type == "rect" and x.line.color == "#FB923C"]

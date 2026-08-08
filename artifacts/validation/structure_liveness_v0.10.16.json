@@ -1,0 +1,10 @@
+{
+  "seeds": 1000,
+  "bars_per_seed": 300,
+  "shared_endpoint_replacement_seeds": 252,
+  "anchor_loss_seed_count": 0,
+  "monotonic_failure_count": 0,
+  "commit_lag_seed_count": 0,
+  "failure_count": 0,
+  "failure_examples": []
+}

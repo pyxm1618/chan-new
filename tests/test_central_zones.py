@@ -110,28 +110,40 @@ def test_real_snapshot_central_zones_match_frozen_czsc_logic() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars, min_bi_len=6)
+    result = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
+    # 全部当前笔的结果保留为候选，用于与冻结 CZSC 几何算法做兼容校验。
     comparison = compare_central_zones_with_czsc(
-        result.central_zones,
-        result.central_zone_groups,
+        result.central_zone_candidates,
+        result.central_zone_candidate_groups,
         result.strokes,
     )
 
-    assert len(result.central_zone_groups) == 3
-    assert len(result.central_zones) == 2
-    assert [x.stroke_count for x in result.central_zones] == [13, 11]
-    assert [(x.zd, x.zg) for x in result.central_zones] == [
+    assert len(result.central_zone_candidate_groups) == 3
+    assert len(result.central_zone_candidates) == 2
+    assert [x.stroke_count for x in result.central_zone_candidates] == [13, 11]
+    assert [(x.zd, x.zg) for x in result.central_zone_candidates] == [
         (7929.03, 8023.0),
         (9074.34, 9369.8),
     ]
     assert comparison.all_match
-    assert validate_central_zones(result.central_zones, result.strokes) == ()
+    assert validate_central_zones(result.central_zone_candidates, result.strokes) == ()
+
+    # 该测试显式声明输入从冻结样本的真实起点开始，因此首分组允许正式输出。
+    assert result.unresolved_central_zones == ()
+    # 正式笔中枢只消费已经进入正式线段几何范围的 stable_strokes。
+    # 第二个候选中枢仍依赖确认尾部笔，因此留在候选层，不能提前正式输出。
+    assert len(result.central_zones) == 1
+    assert [x.stroke_count for x in result.central_zones] == [13]
+    assert [(x.zd, x.zg) for x in result.central_zones] == [
+        (7929.03, 8023.0),
+    ]
+    assert validate_central_zones(result.central_zones, result.resolved_strokes) == ()
 
 
 def test_batch_and_incremental_results_include_identical_zones() -> None:
     bars = demo_bars(220)
-    expected = analyze_bars(bars)
-    actual = FractalEngine().extend(bars)
+    expected = analyze_bars(bars, left_boundary_anchored=True)
+    actual = FractalEngine(left_boundary_anchored=True).extend(bars)
     assert actual.central_zone_groups == expected.central_zone_groups
     assert actual.central_zones == expected.central_zones
     assert actual.central_zone_diagnostics == expected.central_zone_diagnostics
@@ -141,7 +153,7 @@ def test_chart_draws_one_light_blue_rectangle_per_valid_zone() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars)
+    result = analyze_bars(bars, left_boundary_anchored=True)
     figure = build_raw_chart(result)
 
     rectangles = [

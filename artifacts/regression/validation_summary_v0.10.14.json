@@ -1,0 +1,106 @@
+{
+  "version": "0.10.14",
+  "pytest": {
+    "tests": 113,
+    "passed": 112,
+    "skipped": 1,
+    "failures": 0,
+    "errors": 0
+  },
+  "first_buy": {
+    "random_cases": 1000,
+    "random_reference_mismatches": 0,
+    "random_formal_buy1_count": 719,
+    "demo_bars": 5000,
+    "demo_formal_segments": 56,
+    "demo_point_scans": 55,
+    "demo_trading_points": 0,
+    "demo_first_points": 0,
+    "real_bars": 500,
+    "real_formal_segments": 2,
+    "real_trading_points": 0,
+    "real_first_points": 0,
+    "checks": 4451,
+    "failure_count": 0,
+    "failures": []
+  },
+  "structure_stability": {
+    "bars_scanned": 5000,
+    "detected_stroke_retractions_expected_in_provisional_layer": 175,
+    "final_detected_strokes": 338,
+    "final_all_strokes": 338,
+    "final_stable_strokes": 330,
+    "final_resolved_strokes": 330,
+    "final_unresolved_prefix_strokes": 0,
+    "final_provisional_strokes": 8,
+    "final_unresolved_prefix_segments": 0,
+    "final_formal_segments": 56,
+    "final_provisional_segments": 1,
+    "formal_failure_count": 0,
+    "failures": {
+      "stable_stroke_retractions": [],
+      "formal_segment_retractions": [],
+      "pen_zone_disappearances": [],
+      "pen_zone_right_shrinks": [],
+      "segment_zone_disappearances": [],
+      "segment_zone_right_shrinks": []
+    }
+  },
+  "window_stability": {
+    "bars_scanned": 5000,
+    "trusted_origin_reference": {
+      "strokes": 338,
+      "formal_segments": 56,
+      "formal_central_zones": 46,
+      "formal_segment_central_zones": 1
+    },
+    "unanchored_windows_checked": 19,
+    "anchored_windows_checked": 20,
+    "anchored_windows_with_formal_zones": 14,
+    "missing_anchor_checks": 1,
+    "raw_window_stride": 250,
+    "minimum_window_bars": 500,
+    "anchor_context_bars": 750,
+    "max_anchor_windows": 20,
+    "failure_count": 0,
+    "failures": []
+  },
+  "segment_commits": {
+    "bars_scanned": 5000,
+    "formal_segments": 56,
+    "stable_strokes": 330,
+    "validator_issue_count": 0,
+    "validator_issues": [],
+    "missing_commit_time": [],
+    "commit_time_monotonic": true,
+    "commit_position_monotonic": true,
+    "commit_first_seen_mismatch_count": 0,
+    "commit_first_seen_mismatches": [],
+    "first_commit": "2026-01-01T14:04:59.999000+00:00",
+    "last_commit": "2026-01-18T02:39:59.999000+00:00"
+  },
+  "feature_tail": {
+    "real_bars": 500,
+    "real_strokes": 26,
+    "real_stable_strokes": 19,
+    "real_formal_segments": 2,
+    "real_validator_issues": [],
+    "anchored_feature_tail_position": 24,
+    "real_last_stroke_position": 25,
+    "anchored_feature_tail_gap": 1,
+    "anchored_coverage_issues": [],
+    "real_prefixes_checked": 170,
+    "real_prefix_failure_count": 0,
+    "real_prefix_failures": [],
+    "demo_bars": 5000,
+    "demo_formal_segments": 56,
+    "demo_validator_issues": []
+  },
+  "wheel_smoke": {
+    "installed_version": "0.10.14",
+    "import_ok": true,
+    "demo_bars": 120,
+    "demo_strokes": 11,
+    "demo_trading_points": 0
+  }
+}

@@ -128,13 +128,14 @@ def test_current_bar_never_enters_confirmed_structure_layer() -> None:
         current_bar=current,
         fetched_at=current.open_time + timedelta(minutes=2),
     )
-    expected = analyze_bars(closed)
+    expected = analyze_bars(closed, left_boundary_anchored=True)
     bundle = analyze_snapshot(
         snapshot,
         czsc_compatibility=True,
         min_bi_len=6,
         metadata=AnalysisMetadata.binance_rest(market="Binance 现货", source_url="https://data-api.binance.vision/api/v3/klines"),
         segment_mode=SegmentMode.FEATURE_SEQUENCE,
+        left_boundary_anchored=True,
     )
     assert bundle.confirmed.raw_bars == expected.raw_bars
     assert bundle.confirmed.strokes == expected.strokes
@@ -168,6 +169,7 @@ def test_chart_draws_same_color_dashed_provisional_pen_and_segment() -> None:
         snapshot, czsc_compatibility=True, min_bi_len=6,
         metadata=AnalysisMetadata.binance_rest(market="Binance 现货", source_url="https://data-api.binance.vision/api/v3/klines"),
         segment_mode=SegmentMode.FEATURE_SEQUENCE,
+        left_boundary_anchored=True,
     )
     fig = build_raw_chart(bundle.confirmed, live_overlay=bundle.overlay)
     traces = {trace.name: trace for trace in fig.data}
@@ -181,16 +183,20 @@ def test_chart_draws_same_color_dashed_provisional_pen_and_segment() -> None:
 
 def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministically() -> None:
     bars = demo_bars(5000, symbol="BTCUSDT", interval="5m")
-    first = analyze_bars(bars)
-    second = analyze_bars(bars)
+    first = analyze_bars(bars, left_boundary_anchored=True)
+    second = analyze_bars(bars, left_boundary_anchored=True)
     assert len(first.raw_bars) == 5000
     assert len(first.merged_bars) == 3721
     assert len(first.fractals) == 851
     assert len(first.strokes) == 338
-    assert len(first.segments) == 61
-    assert len(first.feature_elements) == 307
-    assert len(first.feature_fractals) == 63
-    assert len(first.unfinished_segment_strokes) == 3
+    assert len(first.detected_segments) == 57
+    assert len(first.unresolved_prefix_segments) == 0
+    assert len(first.segments) == 56
+    assert len(first.provisional_segments) == 1
+    assert len(first.resolved_strokes) == 328
+    assert len(first.feature_elements) == 659
+    assert len(first.feature_fractals) == 88
+    assert len(first.detected_unfinished_segment_strokes) == 6
     assert max(
         position
         for element in first.feature_elements
@@ -198,6 +204,8 @@ def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministicall
     ) == len(first.strokes) - 1
     assert first.strokes == second.strokes
     assert first.segments == second.segments
+    assert first.detected_segments == second.detected_segments
+    assert first.stable_strokes == second.stable_strokes
     assert first.central_zones == second.central_zones
     assert first.segment_central_zones == second.segment_central_zones
     assert first.trading_points == second.trading_points
@@ -322,6 +330,7 @@ def test_confirmed_analysis_is_reused_until_a_bar_closes_then_recomputed() -> No
         min_bi_len=6,
         metadata=metadata,
         segment_mode=SegmentMode.FEATURE_SEQUENCE,
+        left_boundary_anchored=True,
     )
 
     second_current = make_current(3)
@@ -340,6 +349,7 @@ def test_confirmed_analysis_is_reused_until_a_bar_closes_then_recomputed() -> No
         min_bi_len=6,
         metadata=metadata,
         segment_mode=SegmentMode.FEATURE_SEQUENCE,
+        left_boundary_anchored=True,
         previous=first_bundle,
     )
     assert second_bundle.confirmed is first_bundle.confirmed
@@ -374,6 +384,7 @@ def test_confirmed_analysis_is_reused_until_a_bar_closes_then_recomputed() -> No
         min_bi_len=6,
         metadata=metadata,
         segment_mode=SegmentMode.FEATURE_SEQUENCE,
+        left_boundary_anchored=True,
         previous=second_bundle,
     )
     assert third_bundle.confirmed is not second_bundle.confirmed

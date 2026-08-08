@@ -1,0 +1,4 @@
+event,endpoint_position,endpoint_price,detected_at_position,gap,selected_result
+primary_candidate,21,88.6365448331546,23,True,False
+primary_candidate,25,87.98510805198188,27,False,True
+primary_candidate,31,87.62698570132166,33,False,False

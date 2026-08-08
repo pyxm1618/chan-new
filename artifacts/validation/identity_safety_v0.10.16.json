@@ -1,0 +1,20 @@
+{
+  "checks": {
+    "macd_wrong_symbol_rejected": true,
+    "macd_wrong_interval_rejected": true,
+    "macd_anchor_gap_rejected": true,
+    "gapped_history_not_exact": true,
+    "cross_symbol_segment_evidence_rejected": true,
+    "segment_index_commit_mapping_rejected": true,
+    "trading_point_confirmation_time_tamper_detected": true,
+    "empty_committed_chain_clean": true,
+    "two_stroke_tail_audited": true,
+    "immutable_confirmation_snapshots_complete": true,
+    "seed_509_false_commit_time_issue_count": 0
+  },
+  "seed_509_formal_segments": 6,
+  "seed_509_stable_strokes": 40,
+  "seed_509_validator_issue_codes": [],
+  "failure_count": 0,
+  "failures": []
+}

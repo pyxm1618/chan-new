@@ -30,6 +30,14 @@ def main() -> None:
     fetch.add_argument("--min-bi-len", type=int, default=6)
     fetch.add_argument("--segment-mode", choices=[SegmentMode.FEATURE_SEQUENCE.value], default=SegmentMode.FEATURE_SEQUENCE.value)
     fetch.add_argument("--output", default="artifacts/binance_klines.csv")
+    fetch.add_argument(
+        "--trust-left-boundary",
+        action="store_true",
+        help=(
+            "仅当下载范围确实从该品种/周期真实历史起点开始时启用正式线段、中枢和买卖点；"
+            "普通最近 N 根窗口请勿开启"
+        ),
+    )
 
     export = sub.add_parser("export-demo", help="导出带水印的模拟数据 HTML")
     export.add_argument("--count", type=int, default=180)
@@ -53,6 +61,7 @@ def main() -> None:
                 market=f"Binance {market.label}",
                 source_url=client.source_url(market),
             ),
+            left_boundary_anchored=args.trust_left_boundary,
         )
         strokes_frame(result).to_csv(output.with_name(output.stem + "_strokes.csv"), index=False)
         segments_frame(result).to_csv(output.with_name(output.stem + "_segments.csv"), index=False)
@@ -64,6 +73,11 @@ def main() -> None:
             output.with_name(output.stem + "_trading_points.csv"), index=False
         )
         print(f"保存 {len(bars)} 根 K 线到 {output}")
+        if not result.left_boundary_resolved:
+            print(
+                "警告：当前窗口没有可信左边界，线段/中枢/买卖点只输出候选；"
+                "正式 CSV 将为空。"
+            )
         print(
             f"无包含 K {len(result.merged_bars)} 根，分型 {len(result.fractals)} 个，"
             f"笔 {len(result.strokes)} 条，线段 {len(result.segments)} 条，"
@@ -79,6 +93,7 @@ def main() -> None:
             min_bi_len=args.min_bi_len,
             segment_mode=SegmentMode(args.segment_mode),
             metadata=AnalysisMetadata.demo(),
+            left_boundary_anchored=True,
         )
         build_raw_chart(result).write_html(output, include_plotlyjs=True)
         print(f"已导出 {output}")

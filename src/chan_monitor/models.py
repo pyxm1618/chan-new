@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import hashlib
+import json
 from typing import Iterable
 
 
@@ -144,6 +146,55 @@ class RawBar:
 
 
 @dataclass(frozen=True, slots=True)
+class MacdAnchor:
+    """MACD 在输入窗口第一根 K 线之前的精确递推状态。
+
+    有限窗口仅凭自身无法精确恢复 EMA12、EMA26 与 DEA。调用方在滚动窗口、
+    服务重启或持久化恢复时，应保存上一根已处理 K 线后的该状态，并将其作为
+    下一窗口的 ``macd_anchor`` 传入。
+    """
+
+    symbol: str
+    interval: str
+    asof: datetime
+    last_open_time: datetime
+    last_close_time: datetime
+    expected_next_open_time: datetime
+    last_bar_fingerprint: str
+    ema_fast: float
+    ema_slow: float
+    dea: float
+    exact: bool = True
+    history_start_open_time: datetime | None = None
+    processed_bar_count: int = 0
+
+    def __post_init__(self) -> None:
+        if self.asof.tzinfo is None:
+            raise ValueError("MacdAnchor.asof 必须是带时区的 datetime")
+        for name, value in (
+            ("last_open_time", self.last_open_time),
+            ("last_close_time", self.last_close_time),
+            ("expected_next_open_time", self.expected_next_open_time),
+        ):
+            if value.tzinfo is None:
+                raise ValueError(f"MacdAnchor.{name} 必须是带时区的 datetime")
+        if self.history_start_open_time is not None and self.history_start_open_time.tzinfo is None:
+            raise ValueError("MacdAnchor.history_start_open_time 必须是带时区的 datetime")
+        if not self.symbol:
+            raise ValueError("MacdAnchor.symbol 不能为空")
+        if not self.interval:
+            raise ValueError("MacdAnchor.interval 不能为空")
+        if self.asof != self.last_close_time:
+            raise ValueError("MacdAnchor.asof 必须等于 last_close_time")
+        if self.expected_next_open_time <= self.last_open_time:
+            raise ValueError("MacdAnchor.expected_next_open_time 必须晚于 last_open_time")
+        if len(self.last_bar_fingerprint) != 64:
+            raise ValueError("MacdAnchor.last_bar_fingerprint 必须是 SHA-256 十六进制摘要")
+        if self.processed_bar_count < 0:
+            raise ValueError("MacdAnchor.processed_bar_count 不能为负数")
+
+
+@dataclass(frozen=True, slots=True)
 class MergedBar:
     id: int
     symbol: str
@@ -277,6 +328,10 @@ class Stroke:
             values.extend(bar.elements)
         return tuple(values)
 
+    @property
+    def fingerprint(self) -> str:
+        return stroke_fingerprint(self)
+
 
 @dataclass(frozen=True, slots=True)
 class Segment:
@@ -351,6 +406,15 @@ class Segment:
     @property
     def volume(self) -> float:
         return float(sum(x.volume for x in self.raw_bars))
+
+    @property
+    def interval(self) -> str | None:
+        intervals = {bar.interval for bar in self.raw_bars}
+        return next(iter(intervals)) if len(intervals) == 1 else None
+
+    @property
+    def fingerprint(self) -> str:
+        return segment_fingerprint(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -437,7 +501,13 @@ class FeatureFractal:
 
 @dataclass(frozen=True, slots=True)
 class SegmentEvidence:
-    """一条已确认线段的数据层确认依据。"""
+    """一条已确认线段的数据层确认依据。
+
+    ``gap_origin_fractal`` 记录进入“有缺口等待反向确认”状态时的首个主
+    特征分型。等待期间端点可能被后续更高顶或更低底迁移；当最终极值尚未
+    形成新的完整主特征分型时，``primary_fractal`` 仍保留最近可审计的主
+    分型，``final_endpoint`` 则明确记录线段实际采用的最终端点。
+    """
 
     segment_index: int
     start_position: int
@@ -445,12 +515,40 @@ class SegmentEvidence:
     confirmation: str
     primary_fractal: FeatureFractal
     reverse_fractal: FeatureFractal | None = None
+    gap_origin_fractal: FeatureFractal | None = None
+    final_endpoint: Fractal | None = None
+    # 与线段几何强绑定的不可变身份。正式买卖点接口不再只按 segment_index
+    # 配对，以免多品种、持久化恢复或缓存复用时把其他线段的提交时间套进来。
+    segment_symbol: str | None = None
+    segment_interval: str | None = None
+    segment_fingerprint: str | None = None
+    # 线段确认事件发生时的不可变快照。确认尾笔随后即使迁移，也不能用当前
+    # 同位置的新笔反推过去的可用时间。
+    confirmation_available_at: datetime | None = None
+    confirmation_stroke_fingerprint: str | None = None
+    # 线段真正进入正式提交账本的时间。它与线段端点时间、特征序列确认笔
+    # 时间是三个不同概念；实时通知与无未来函数回测必须使用该字段。
+    committed_at: datetime | None = None
+    # 当前分析输入中的原始 K 线零基位置。持久化到外部系统时应同时保存
+    # committed_at；窗口切换后该位置只用于本次运行内审计。
+    committed_at_bar_position: int | None = None
 
     @property
     def confirmed_at_position(self) -> int:
         if self.reverse_fractal is not None:
             return self.reverse_fractal.detected_at_position
         return self.primary_fractal.detected_at_position
+
+    @property
+    def is_committed(self) -> bool:
+        return self.committed_at is not None
+
+    def matches_segment(self, segment: Segment) -> bool:
+        return (
+            self.segment_symbol == segment.symbol
+            and self.segment_interval == segment.interval
+            and self.segment_fingerprint == segment.fingerprint
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -505,6 +603,29 @@ class CentralZone:
     @property
     def dd(self) -> float:
         return min(x.low for x in self.strokes)
+
+    @property
+    def departure_stroke(self) -> Stroke | None:
+        """中枢尾部已经完成的离开笔；它不属于 GG/DD 趋势比较的盘整本体。"""
+        last = self.strokes[-1]
+        if last.end_value < self.zd or last.end_value > self.zg:
+            return last
+        return None
+
+    @property
+    def trend_strokes(self) -> tuple[Stroke, ...]:
+        """用于同级别中枢 GG/DD 关系的盘整本体，不包含最终离开笔。"""
+        if self.departure_stroke is not None:
+            return self.strokes[:-1]
+        return self.strokes
+
+    @property
+    def trend_gg(self) -> float:
+        return max(x.high for x in self.trend_strokes)
+
+    @property
+    def trend_dd(self) -> float:
+        return min(x.low for x in self.trend_strokes)
 
     @property
     def source_start(self) -> datetime:
@@ -589,6 +710,34 @@ class SegmentCentralZone:
         return min(x.low for x in self.segments)
 
     @property
+    def departure_segment(self) -> Segment | None:
+        """中枢尾部已经完成的离开线段。
+
+        线段为连续走势，最终离开段必然在起点处与固定中枢区间相交，因此
+        扫描器会把它保留在中枢切片尾部。趋势 GG/DD 不能把这条 A/C 连接段
+        当作中枢盘整本体，否则相邻中枢会因连续端点而被系统性误判为重叠。
+        """
+        last = self.segments[-1]
+        if last.end_value < self.zd or last.end_value > self.zg:
+            return last
+        return None
+
+    @property
+    def trend_segments(self) -> tuple[Segment, ...]:
+        """用于严格趋势关系的中枢盘整本体，不包含最终离开线段。"""
+        if self.departure_segment is not None:
+            return self.segments[:-1]
+        return self.segments
+
+    @property
+    def trend_gg(self) -> float:
+        return max(x.high for x in self.trend_segments)
+
+    @property
+    def trend_dd(self) -> float:
+        return min(x.low for x in self.trend_segments)
+
+    @property
     def source_start(self) -> datetime:
         return self.segments[0].source_start
 
@@ -661,10 +810,25 @@ class TrendDivergence:
     exit_end_dt: datetime
     price_extreme: bool
     macd_divergence: bool
+    # True 表示 MACD 由真实历史起点递推，或由持久化 MacdAnchor 无缝恢复。
+    # 有限窗口自行用首价初始化只能作为候选证据，不能生成正式一买/一卖。
+    macd_state_exact: bool = True
+    strict_trend: bool = True
+    # 操作级别 c 内部必须已经形成对最后中枢 B 的次级别三类点，并至少
+    # 包含两个次级别中枢；stroke 是当前最低建模级别，只能以完成笔为下限。
+    sublevel_third_point: bool = True
+    sublevel_zone_count: int = 0
 
     @property
     def is_valid(self) -> bool:
-        return self.price_extreme and self.macd_divergence
+        return (
+            self.strict_trend
+            and self.price_extreme
+            and self.macd_divergence
+            and self.macd_state_exact
+            and self.sublevel_third_point
+            and self.sublevel_zone_count >= (0 if self.level == "stroke" else 2)
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -726,6 +890,38 @@ class StrokeDiagnostic:
     code: str
     message: str
     dt: datetime | None = None
+
+
+def stroke_fingerprint(stroke: Stroke) -> str:
+    payload = {
+        "symbol": stroke.symbol,
+        "direction": stroke.direction.value,
+        "start_dt": stroke.start_dt.isoformat(),
+        "end_dt": stroke.end_dt.isoformat(),
+        "start_value": format(float(stroke.start_value), ".17g"),
+        "end_value": format(float(stroke.end_value), ".17g"),
+        "source_start": stroke.source_start.isoformat(),
+        "source_end": stroke.source_end.isoformat(),
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def segment_fingerprint(segment: Segment) -> str:
+    payload = {
+        "symbol": segment.symbol,
+        "interval": segment.interval,
+        "direction": segment.direction.value,
+        "start_dt": segment.start_dt.isoformat(),
+        "end_dt": segment.end_dt.isoformat(),
+        "start_value": format(float(segment.start_value), ".17g"),
+        "end_value": format(float(segment.end_value), ".17g"),
+        "source_start": segment.source_start.isoformat(),
+        "source_end": segment.source_end.isoformat(),
+        "strokes": [stroke_fingerprint(stroke) for stroke in segment.strokes],
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def unique_elements(elements: Iterable[RawBar]) -> tuple[RawBar, ...]:

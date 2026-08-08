@@ -6,9 +6,10 @@ from typing import Sequence
 
 import pandas as pd
 
-from .models import RawBar, Segment, SegmentCentralZone, SegmentEvidence, Stroke, TradingPoint, unique_elements
+from .bar_stream import next_open_time, validate_bar_stream
+from .models import MacdAnchor, RawBar, Segment, SegmentCentralZone, SegmentEvidence, Stroke, TradingPoint, unique_elements
 
-REFERENCE_NAME = "缠论走势级别递归规则 + MACD 背驰量化（独立字典复算）"
+REFERENCE_NAME = "严格 GG/DD 趋势 + c 内三类点/双中枢 + 同方向 MACD（独立字典复算）"
 REFERENCE_CXT_URL = "https://github.com/waditu/czsc"
 REFERENCE_WIKI_URL = "https://czsc.readthedocs.io/en/0.9.6/_static/%E7%BC%A0%E4%B8%AD%E8%AF%B4%E7%A6%85%E6%8A%80%E6%9C%AF%E5%8E%9F%E7%90%86.html"
 _EPS = 1e-9
@@ -59,21 +60,28 @@ def run_frozen_trading_point_reference(
     zones: Sequence[SegmentCentralZone],
     *,
     raw_bars: Sequence[RawBar] = (),
+    macd_history_anchored: bool = False,
+    macd_anchor: MacdAnchor | None = None,
 ) -> tuple[FrozenTradingPoint, ...]:
     """以基础字典独立复算，不调用生产买卖点识别器。"""
     units = tuple(_unit_dict(x) for x in segments)
     zone_dicts = tuple(
         {
             "index": int(x.index), "start": int(x.start_position), "end": int(x.end_position),
-            "zg": float(x.zg), "zd": float(x.zd), "gg": float(x.gg), "dd": float(x.dd),
+            "zg": float(x.zg), "zd": float(x.zd),
+            "gg": float(x.trend_gg), "dd": float(x.trend_dd),
         }
         for x in zones
     )
     bars = tuple(sorted(raw_bars or _bars_from_segments(segments), key=lambda x: x.open_time))
-    hist = _hist(bars)
+    hist, macd_exact = _hist(
+        bars,
+        history_anchored=macd_history_anchored,
+        anchor=macd_anchor,
+    )
     out: list[FrozenTradingPoint] = []
 
-    first = _first_points(units, zone_dicts, hist, segment_index_override=None)
+    first = _first_points(units, zone_dicts, hist, macd_exact, segment_index_override=None)
     out.extend(first)
 
     by_index = {int(x["index"]): i for i, x in enumerate(units)}
@@ -93,7 +101,7 @@ def run_frozen_trading_point_reference(
         local_strokes = tuple(_unit_dict(x) for x in segments[pos + 2].strokes)
         local_zones = _stroke_zones(local_strokes)
         local_first = _first_points(
-            local_strokes, local_zones, hist, segment_index_override=int(retrace["index"])
+            local_strokes, local_zones, hist, macd_exact, segment_index_override=int(retrace["index"])
         )
         needed = "B1" if is_buy else "S1"
         lower_ok = any(
@@ -153,8 +161,16 @@ def compare_trading_points_with_reference(
     raw_bars: Sequence[RawBar] = (),
     segment_evidence: Sequence[SegmentEvidence] = (),
     strokes: Sequence[Stroke] = (),
+    macd_history_anchored: bool = True,
+    macd_anchor: MacdAnchor | None = None,
 ) -> TradingPointReferenceComparison:
-    reference = run_frozen_trading_point_reference(segments, zones, raw_bars=raw_bars)
+    reference = run_frozen_trading_point_reference(
+        segments,
+        zones,
+        raw_bars=raw_bars,
+        macd_history_anchored=macd_history_anchored,
+        macd_anchor=macd_anchor,
+    )
     rows = []
     for i in range(max(len(points), len(reference))):
         ours = points[i] if i < len(points) else None
@@ -176,29 +192,42 @@ def compare_trading_points_with_reference(
     return TradingPointReferenceComparison(REFERENCE_NAME, REFERENCE_CXT_URL, REFERENCE_WIKI_URL, tuple(rows))
 
 
-def _first_points(units, zones, hist, segment_index_override):
+def _first_points(units, zones, hist, macd_exact, segment_index_override):
     out = []
+    if not macd_exact:
+        return out
     for previous, last in zip(zones, zones[1:]):
-        if float(last["zg"]) < float(previous["zd"]) - _EPS:
+        if float(last["gg"]) < float(previous["dd"]) - _EPS:
             direction, kind = "down", "B1"
-        elif float(last["zd"]) > float(previous["zg"]) + _EPS:
+        elif float(last["dd"]) > float(previous["gg"]) + _EPS:
             direction, kind = "up", "S1"
         else:
             continue
         entry = _entry(units, previous, last, direction)
         exit_ = _exit(units, last, direction)
-        if entry is None or exit_ is None:
+        if entry is None or exit_ is None or exit_ <= entry:
             continue
-        a, b = units[entry], units[exit_]
-        extreme = float(b["end"]) < float(a["end"]) - _EPS if direction == "down" else float(b["end"]) > float(a["end"]) + _EPS
-        area_a, area_b = _area(a, hist), _area(b, hist)
-        if extreme and area_a > _EPS and area_b < area_a - _EPS:
+        a, c = units[entry], units[exit_]
+        prior = units[entry:exit_]
+        if direction == "down":
+            extreme = float(c["end"]) < min(float(x["low"]) for x in prior) - _EPS
+        else:
+            extreme = float(c["end"]) > max(float(x["high"]) for x in prior) + _EPS
+        if segment_index_override is None:
+            sublevel_third, sublevel_zone_count = _internal_third(c, last, direction)
+            sublevel_complete = sublevel_third and sublevel_zone_count >= 2
+        else:
+            # stroke 是当前参考模型的最低递归层。
+            sublevel_complete = True
+        area_a = _area(a, hist, direction)
+        area_c = _area(c, hist, direction)
+        if sublevel_complete and extreme and area_a > _EPS and area_c < area_a - _EPS:
             out.append(
                 FrozenTradingPoint(
-                    kind, b["end_dt"], float(b["end"]),
-                    segment_index_override if segment_index_override is not None else int(b["index"]),
-                    "TREND_MACD_DIVERGENCE", int(last["index"]),
-                    (int(a["index"]), int(b["index"])),
+                    kind, c["end_dt"], float(c["end"]),
+                    segment_index_override if segment_index_override is not None else int(c["index"]),
+                    "STRICT_TREND_DIRECTIONAL_MACD_DIVERGENCE", int(last["index"]),
+                    (int(a["index"]), int(c["index"])),
                 )
             )
     return out
@@ -218,16 +247,35 @@ def _entry(units, previous, last, direction):
 
 
 def _exit(units, zone, direction):
-    start, stop = max(0, int(zone["start"]) + 2), min(len(units) - 1, int(zone["end"]) + 1)
-    for pos in range(start, stop + 1):
-        x = units[pos]
-        if x["direction"] != direction:
-            continue
-        if direction == "down" and float(x["start"]) >= float(zone["zd"]) - _EPS and float(x["end"]) < float(zone["zd"]) - _EPS:
-            return pos
-        if direction == "up" and float(x["start"]) <= float(zone["zg"]) + _EPS and float(x["end"]) > float(zone["zg"]) + _EPS:
-            return pos
-    return None
+    pos = int(zone["end"])
+    if pos < 0 or pos >= len(units):
+        return None
+    x = units[pos]
+    if x["direction"] != direction:
+        return None
+    if direction == "down":
+        return pos if float(x["start"]) >= float(zone["zd"]) - _EPS and float(x["end"]) < float(zone["zd"]) - _EPS else None
+    return pos if float(x["start"]) <= float(zone["zg"]) + _EPS and float(x["end"]) > float(zone["zg"]) + _EPS else None
+
+
+def _internal_third(unit, zone, direction):
+    lower = tuple(unit.get("subunits", ()))
+    if len(lower) < 3:
+        return False, 0
+    zone_count = len(_stroke_zones(lower))
+    for pos in range(len(lower) - 2):
+        departure, pullback, continuation = lower[pos : pos + 3]
+        if direction == "down":
+            valid = (departure["direction"] == "down" and float(departure["end"]) < float(zone["zd"]) - _EPS
+                     and pullback["direction"] == "up" and float(pullback["high"]) <= float(zone["zd"]) + _EPS
+                     and continuation["direction"] == "down" and float(continuation["end"]) < float(pullback["start"]) - _EPS)
+        else:
+            valid = (departure["direction"] == "up" and float(departure["end"]) > float(zone["zg"]) + _EPS
+                     and pullback["direction"] == "down" and float(pullback["low"]) >= float(zone["zg"]) - _EPS
+                     and continuation["direction"] == "up" and float(continuation["end"]) > float(pullback["start"]) + _EPS)
+        if valid:
+            return True, zone_count
+    return False, zone_count
 
 
 def _stroke_zones(units):
@@ -255,40 +303,81 @@ def _stroke_zones(units):
             continue
         valid = all(float(v["high"]) >= zd and float(v["low"]) <= zg for v in group)
         if valid:
+            departure = group[-1] if float(group[-1]["end"]) < zd or float(group[-1]["end"]) > zg else None
+            body = group[:-1] if departure is not None else group
+            if len(body) < 3:
+                continue
             zones.append({"index": len(zones), "start": start, "end": end, "zg": zg, "zd": zd,
-                          "gg": max(float(v["high"]) for v in group), "dd": min(float(v["low"]) for v in group)})
+                          "gg": max(float(v["high"]) for v in body), "dd": min(float(v["low"]) for v in body)})
     return tuple(zones)
 
 
 def _unit_dict(x):
-    return {
+    value = {
         "index": int(x.index), "direction": x.direction.value,
         "start_dt": x.start_dt, "end_dt": x.end_dt,
         "start": float(x.start_value), "end": float(x.end_value),
         "high": float(x.high), "low": float(x.low), "power": float(x.power),
         "source_start": x.source_start, "source_end": x.source_end,
     }
+    if hasattr(x, "strokes"):
+        value["subunits"] = tuple(_unit_dict(stroke) for stroke in x.strokes)
+    return value
 
 
-def _hist(bars):
+def _hist(bars, *, history_anchored, anchor):
     if not bars:
-        return {}
-    closes = [float(x.close) for x in bars]
-    e12, e26 = _ema(closes, 12), _ema(closes, 26)
-    dif = [a - b for a, b in zip(e12, e26)]
-    dea = _ema(dif, 9)
-    return {x.open_time: 2 * (a - b) for x, a, b in zip(bars, dif, dea)}
+        return {}, bool(history_anchored) if anchor is None else bool(anchor.exact)
+    bars = tuple(bars)
+    stream = validate_bar_stream(bars)
+    if anchor is not None:
+        if stream.symbol != anchor.symbol or stream.interval != anchor.interval:
+            raise ValueError("MacdAnchor 与参考窗口品种或周期不匹配")
+        expected_from_cursor = next_open_time(anchor.last_open_time, anchor.interval)
+        if anchor.expected_next_open_time != expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 参考游标与周期不一致："
+                f"last_open_time={anchor.last_open_time.isoformat()}，"
+                f"周期 {anchor.interval} 的下一根应为 {expected_from_cursor.isoformat()}，"
+                f"锚点却声明 {anchor.expected_next_open_time.isoformat()}"
+            )
+        if anchor.last_close_time > expected_from_cursor:
+            raise ValueError(
+                "MacdAnchor 参考收盘时间越过下一周期起点："
+                f"last_close_time={anchor.last_close_time.isoformat()}，"
+                f"下一根应从 {expected_from_cursor.isoformat()} 开始"
+            )
+        if bars[0].open_time != anchor.expected_next_open_time:
+            raise ValueError("MacdAnchor 与参考窗口不连续")
+        if not stream.continuous:
+            raise ValueError("MacdAnchor 后的参考窗口存在 K 线断档")
+    af, aslow, signal = 2 / 13, 2 / 27, 2 / 10
+    out = {}
+    if anchor is None:
+        ef = es = float(bars[0].close)
+        dea = 0.0
+        out[bars[0].open_time] = 0.0
+        remaining = bars[1:]
+        exact = bool(history_anchored and stream.continuous)
+    else:
+        ef, es, dea = float(anchor.ema_fast), float(anchor.ema_slow), float(anchor.dea)
+        remaining = bars
+        exact = bool(anchor.exact)
+    for bar in remaining:
+        close = float(bar.close)
+        ef = af * close + (1 - af) * ef
+        es = aslow * close + (1 - aslow) * es
+        dif = ef - es
+        dea = signal * dif + (1 - signal) * dea
+        out[bar.open_time] = 2 * (dif - dea)
+    return out, exact
 
 
-def _ema(values, span):
-    if not values: return []
-    alpha = 2 / (span + 1); out = [float(values[0])]
-    for x in values[1:]: out.append(alpha * float(x) + (1 - alpha) * out[-1])
-    return out
-
-
-def _area(unit, hist):
-    return float(sum(abs(v) for dt, v in hist.items() if unit["source_start"] <= dt <= unit["source_end"]))
+def _area(unit, hist, direction):
+    values = (v for dt, v in hist.items() if unit["source_start"] <= dt <= unit["source_end"])
+    if direction == "down":
+        return float(sum(-v for v in values if v < 0))
+    return float(sum(v for v in values if v > 0))
 
 
 def _bars_from_segments(segments):
