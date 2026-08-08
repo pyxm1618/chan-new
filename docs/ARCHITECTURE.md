@@ -1,56 +1,60 @@
 # 缠论分析引擎终局架构与理论边界
 
-> 状态：目标架构（Target Architecture）  
+> 状态：Target Architecture / 长期基线候选  
 > 日期：2026-08-08  
-> 目的：定义项目长期结构、理论边界、证据关系和分阶段开发顺序。  
-> 重要：本文不是当前已实现功能清单。除明确标记为当前阶段的内容外，其余模块只做架构预留，不应提前一次性开发。
+> 目的：定义项目长期理论本体、工程边界、证据模型与分阶段开发顺序。  
+> 重要：本文不是当前已实现功能清单。除明确标记为当前阶段的内容外，其余能力只做架构预留，不应一次性开发。
 
 ---
 
-## 1. 核心结论
+## 1. 终局原则
 
-本项目长期遵守以下原则：
+本项目长期遵守以下原则，这些原则优先于历史实现：
 
-1. **结构事实、走势终结、买卖点身份、买点质量、跨级别关系、策略选择必须分层。**
-2. **B1/B2/B3（以及 S1/S2/S3）始终是标准买卖点身份。**“强弱、递归、共振、大小周期组合”都不能创造新的标准买卖点类型。
-3. **买卖点识别器只回答“它是不是这个买卖点”，不读取强弱配置。**质量模块只计算事实，策略模块才读取配置。
-4. **配置不改写历史事实。**一个已经成立的 2 中枢 B1，在策略改成“只接受 3 中枢 B1”以后，仍然是 B1，只是策略结果由 `ACCEPTED` 变为 `FILTERED`。
-5. **“小转大”不是第四类买点。**它是走势终结机制之一，应和其他走势终结方式放在同一层，但只有在真实跨级别证据存在后才能判定。
-6. **递归不是 `true/false` 的确认开关。**它涉及真实多级别结构、跨级别构成关系、区间套定位、小级别引发大级别转折等多种机制。
-7. **区间套负责定位，不负责重新发明买点身份。**低级别可以精确定位、构成或与高级别买点重合，但各级别仍独立拥有自己的 B1/B2/B3 身份。
-8. **共振、大小周期组合属于上层组合信号。**不建立“市场转折事件”作为底层核心实体；未来如需统一输出，可由底层事实动态生成 `CompositeSignal`。
-9. **单级别可观测事实与跨级别必需证据必须显式区分。**禁止用当前周期内部的笔、线段或局部结构伪装真实低级别证据。
-10. **终局架构一次设计清楚，开发必须分阶段。**前一层没有经过真实行情、前缀一致性和无未来函数验证，不进入下一层。
+1. **Market Interval、Analysis Context、Operation Level、Chan Structure Level 必须分离。**1m/5m/30m 首先是数据采样/观察周期，不能永久等同于理论级别。
+2. **严格递归与固定级别实用分析都要支持，但必须记录构造方式。**原著允许从最低级别逐级递归，也明确允许为了实际操作采用固定级别的简化分析；两者不能混成同一种 provenance。
+3. **GeometricSegment 不等于次级别 MovementType。**只有已经完成的次级别走势类型，才可以在更高级别观察中被抽象为“无内部结构的线段”；不能反过来把任意几何线段自动升级为次级别走势类型。
+4. **Canonical Central Zone 的组成单位是完成的次级别走势类型，不是任意几何 Segment。**当前 `SegmentCentralZone` 只能视为项目级单层近似对象，不能直接作为终局 canonical 中枢本体。
+5. **走势结构、背驰语义、走势完成/演化、买卖点身份是并列消费共同事实的不同引擎。**禁止建立 `TerminationMode -> B1/B2/B3` 的单向父子关系。
+6. **TradingPoint Identity、Quality Facts、Strategy Decision 三层隔离。**配置不能改变已经成立的理论身份。
+7. **身份所需的跨级别证据和策略额外要求的跨级别证据必须分开。**例如严格 B2 的直接次级别 B1 构成关系属于 IdentityEvidence，不是“更强 B2”的可选质量项。
+8. **MACD 是背驰证据/估计方法，不是原著背驰语义本身。**任何指标证据都不能被永久写成理论身份的唯一 hard gate。
+9. **区间套、买点构成、极值承载、重合、共振是不同关系。**禁止统称为一个 `recursive_confirmation`。
+10. **都业华“四种终结模式”、强弱、类二买、分型重构等属于 Practice Layer。**除非能直接核验课程原话，不得伪装成缠中说禅原著枚举或定理。
+11. **共振和大小周期组合属于上层派生信号。**不建立“市场转折事件”作为底层 canonical 实体。
+12. **终局架构可以一次设计清楚，实现必须分阶段。**前一层没有通过真实行情、无未来函数、前缀一致性和审计验证，不进入下一层。
 
 ---
 
 ## 2. 理论来源分层
 
-项目中的规则必须能归入以下三类来源之一，禁止混写。
+所有关键规则必须能追溯到以下三类来源之一。
 
-### 2.1 `ORIGINAL_THEORY`：缠中说禅原著/定理
+### 2.1 `ORIGINAL_THEORY`
 
-用于定义理论核心，例如：
+缠中说禅原著/定理，用于定义：
 
 - 走势终完美；
 - 中枢、盘整、趋势；
-- 中枢延伸、扩展、新生等结构关系；
+- 走势类型连接与分解；
+- 级别的递归定义；
+- 中枢延伸、扩展、新生；
+- 背驰与盘整背驰；
 - 三类买卖点及其完备性；
-- 第二类买点与低级别第一类买点的构成关系；
+- 第二类买卖点由直接次级别第一类买卖点构成；
 - 第三类买卖点；
-- 背驰—转折关系；
-- 区间套；
 - 买卖点级别关系；
-- 小背驰—大转折关系。
+- 区间套；
+- 背驰后的级别与走势演化；
+- 小级别背驰引发更大级别转折的理论关系；
+- 同级别分解、多义性与结合律。
 
-工程文档引用原著时以“课程编号 / 定理主题”为主键，网页仅作为原文镜像入口。
+### 2.2 `DU_YEHUA_PRACTICE`
 
-### 2.2 `DU_YEHUA_PRACTICE`：都业华实战体系
+都业华课程实践体系，用于定义或候选定义：
 
-用于定义实战扩展和质量评价，例如：
-
-- “四种终结方式”的教学框架；
-- B1/B2/B3 的强弱分层；
+- 四种终结模式；
+- B1/B2/B3 强弱；
 - R 比率；
 - 分型停顿；
 - 类二买；
@@ -59,247 +63,448 @@
 - 大小周期组合；
 - 黄金分割等辅助工具。
 
-公开可检索的都业华资料中包含课程目录、公开视频和大量二手整理。因此：
+公开资料中存在大量二手笔记，因此：
 
 - 课程目录可以确认课程主题；
-- 二手笔记只能作为候选规则；
-- 涉及精确阈值、强弱定义和算法落地时，应尽量回到原课程视频核验；
-- 都业华实战规则不得伪装成原著定理。
+- 二手笔记只能形成候选规则；
+- 精确阈值、等号边界、强弱算法落地前应尽量回看课程视频；
+- 未核验细节标记为 `DU_YEHUA_PRACTICE_UNVERIFIED_DETAIL`。
 
-### 2.3 `PROJECT_POLICY`：本项目工程规则
+### 2.3 `PROJECT_POLICY`
 
-用于解决理论软件化必须明确、但原著没有以工程规范描述的问题，例如：
+软件化必须明确、但原著没有用工程规范描述的问题，例如：
 
-- 正式结构与候选结构生命周期；
+- 候选/正式生命周期；
 - `confirmed_at`；
 - 无未来函数；
-- 数据身份、版本与指纹；
-- 审计证据；
-- 规则配置版本；
-- 单级别 MVP 的运行边界；
-- `ACCEPTED / FILTERED` 等策略决策状态。
+- 数据身份与 fingerprint；
+- 分析上下文 ID；
+- 规则版本；
+- 单层近似模式；
+- `IdentityStatus / StrategyDecision`；
+- 审计证据。
 
 ---
 
-## 3. 关键术语与边界
+## 3. 核心本体：先定义“什么东西是什么”
 
-### 3.1 Market Interval 不等于 Chan Structure Level
+### 3.1 `MarketInterval`
 
-工程中必须区分：
-
-- **Market Interval**：1m、5m、30m 等 K 线采样周期；
-- **Chan Structure Level**：由走势、中枢及递归关系形成的缠论结构级别。
-
-当前项目可以使用“5m 分析”“30m 分析”作为工程简称，但长期模型中不能把 `interval` 与 `structure_level` 永久视为同一个概念。
-
-### 3.2 单级别分析
-
-单级别模式只消费当前分析范围内的正式结构：
+表示市场数据采样周期，例如：
 
 ```text
-当前周期 K 线
-→ 当前周期分型
-→ 当前周期笔
-→ 当前周期线段
-→ 当前周期线段中枢
-→ 当前单级别买卖点
+1m / 5m / 30m / 1h / 1d
 ```
 
-**禁止：**
+它回答：
 
-- 把 5m 线段内部的 5m 笔称作“1m 次级别走势”；
-- 用同一周期内部结构模拟真实次级别盘背；
-- 用伪次级别证据完成区间套、小转大或跨级别共振。
+> 数据是按什么时间粒度采样的？
 
-### 3.3 买卖点身份、质量、策略是三件不同的事
+它**不直接回答**理论上的结构级别是什么。
 
-必须分成三个阶段：
+### 3.2 `AnalysisContext`
+
+表示一次分析采用的完整观察上下文，至少包含：
+
+- `analysis_context_id`；
+- `market_interval`；
+- `decomposition_policy_id`；
+- `construction_method`；
+- `operation_level_ref`；
+- 数据起止范围；
+- `as_of` / `confirmed_at`；
+- `rule_version`。
+
+同一段行情允许在不同 `AnalysisContext` 下存在不同但合法的结构解释。
+
+### 3.3 `DecompositionPolicy`
+
+走势连接有结合性和多义性；固定同级别分解可以获得唯一分解。
+
+因此程序必须显式知道当前使用什么分解规则，例如：
 
 ```text
-TradingPointDetector
-        ↓
-TradingPointIdentity
-        ↓
-QualityEvaluator
-        ↓
-QualityFacts
-        ↓
-StrategyFilter + Config
-        ↓
-ACCEPTED / FILTERED / WAITING_FOR_REQUIRED_EVIDENCE
+SAME_LEVEL_DECOMPOSITION
+CENTER_DRIVEN_DECOMPOSITION
+MIXED_OPERATIONAL_DECOMPOSITION
 ```
 
-#### TradingPoint Identity
+Phase 早期只实现一个经过严格验证的固定规则也可以，但不能把“当前唯一实现”误认为“理论唯一解释”。
 
-回答：**它是什么？**
+### 3.4 `ConstructionMethod`
 
-例如：
+终局至少支持三种语义来源：
 
-- 5m B1；
-- 5m B2；
-- 5m B3。
+#### `STRICT_RECURSIVE`
 
-身份判断只能使用该买点的最低理论定义和工程正确性约束，不能读取“我要多强”的策略配置。
+从选定最低不可分级别开始：
 
-#### Quality Facts
+```text
+低级别走势类型
+-> 三个以上连续低级别走势类型重叠形成高一级中枢
+-> 高一级盘整/趋势
+-> 继续向上递归
+```
 
-回答：**它具有什么质量事实？**
+这是原著最严格的递归定义。
 
-例如：
+#### `FIXED_LEVEL_OPERATIONAL`
 
-- B1 中枢数量 = 2；
-- B1 MACD 面积比 = 0.63；
-- B2 反弹是否触及前中枢 ZG；
-- B2 回调是否守住前中枢 ZD；
-- B3 回调是否仅守住 ZG；
-- B3 是否高于中枢内部最高波动；
-- 是否存在真实低级别末端盘背。
+按选定操作/观察级别进行实用分析，把**已经完成的次级别走势类型**在高级别观察中视为无内部结构的线段式单元。
 
-质量模块不得把一个基础身份已经成立的 B2/B3 改成 `REJECTED`。
+原著明确认为这种用法虽然“不大严格”，但实际操作没有原则性问题。
 
-#### Strategy Decision
+#### `SEGMENT_APPROXIMATION`
 
-回答：**当前策略是否接受？**
+当前项目为了先跑通单级别闭环，直接使用 `GeometricSegment -> SegmentCentralZone -> TradingPoint`。
 
-例如：
+这是 `PROJECT_POLICY` 的工程近似，不等价于：
 
-- `ACCEPTED`：身份成立且满足当前配置；
-- `FILTERED`：身份成立，但质量不满足当前配置；
-- `WAITING_FOR_REQUIRED_EVIDENCE`：策略要求真实跨级别证据，但该证据尚未可用。
+```text
+GeometricSegment == completed direct-sublevel MovementType
+```
 
-`REJECTED` 只表示“理论身份不成立”，不得表示“这个点不够强”。
+所有由此生成的买卖点必须保留该 provenance，不能将其静默升级成 `STRICT_RECURSIVE` 结果。
+
+### 3.5 `OperationLevel`
+
+表示策略选择“按哪个级别操作”。
+
+原著明确指出，走势是客观的，而选择用什么级别分析/操作具有主观性。
+
+因此：
+
+```text
+MarketInterval != OperationLevel != StructureLevelRef
+```
+
+三者可能在某种实用分析中名称看起来相同，但领域模型不得合并字段。
+
+### 3.6 `StructureLevelRef`
+
+理论级别优先采用**关系型、上下文绑定**的表示，而不是简单字符串：
+
+```text
+structure_level = "5m"
+```
+
+建议至少具备：
+
+- `structure_level_id`；
+- `analysis_context_id`；
+- `ordinal`（相对级序，可选）；
+- `direct_sublevel_id`；
+- `direct_superlevel_id`；
+- `construction_method`。
+
+不要假设同一个 `L2` 在所有 analysis context 中必然是全局同一对象。
 
 ---
 
-## 4. 架构总图
+## 4. Geometric Structure 与 Chan Movement 必须解耦
+
+### 4.1 `GeometricSegment`
+
+属于几何结构层：
+
+```text
+K线 -> 包含 -> 分型 -> 笔 -> 几何线段
+```
+
+它负责：
+
+- 高低点；
+- 方向；
+- 时间范围；
+- 正式提交时间；
+- fingerprint。
+
+它**不是天然的次级别走势类型**。
+
+### 4.2 `MovementType`
+
+必须成为一等领域实体，而不是普通标签。
+
+建议至少包含：
+
+```text
+movement_id
+analysis_context_id
+structure_level_ref
+movement_type = CONSOLIDATION | UP_TREND | DOWN_TREND
+submovement_refs[]
+central_zone_refs[]
+start/end
+completion_state
+decomposition_policy_id
+construction_method
+confirmed_at
+fingerprint
+```
+
+### 4.3 “把次级别走势看成线段”的正确方向
+
+正确：
+
+```text
+Completed MovementType@L(n-1)
+    -> 在 L(n) 观察中抽象为无内部结构单元
+```
+
+错误：
+
+```text
+任意 GeometricSegment
+    -> 自动获得 MovementType@L(n-1) 身份
+```
+
+如果未来为了渲染或算法统一需要 `MovementProjectionSegment`，必须保存：
+
+```text
+representation_of = movement_id
+```
+
+### 4.4 `CentralZone`
+
+终局 canonical 中枢的 constituent 应当是完成的次级别 `MovementTypeRef`。
+
+建议区分：
+
+```text
+MovementCentralZone    # canonical / theory-level
+SegmentCentralZone     # current project approximation
+```
+
+或者统一一个 `CentralZone` 类型，但必须保留：
+
+```text
+construction_method
+constituent_type
+constituent_refs
+```
+
+禁止让 `SegmentCentralZone` 无迁移边界地长成唯一 canonical 中枢本体。
+
+---
+
+## 5. 终局依赖图：不是一条线，而是共同事实上的多分支
 
 ```mermaid
 flowchart TD
-    A[市场数据 / 时间完整性] --> B[基础几何结构\n包含 / 分型 / 笔 / 线段]
-    B --> C[中枢与走势结构\n中枢 / 盘整 / 上涨 / 下跌]
-    C --> D[中枢状态\n延伸 / 新生 / 扩展]
-    C --> E[力度与背驰事实\n趋势背驰 / 盘整背驰 / 指标证据]
-    D --> F[走势终结机制]
-    E --> F
-    F --> G[标准买卖点身份\nB1 B2 B3 / S1 S2 S3]
-    G --> H[买卖点质量事实]
-    H --> I[真实多级别 AnalysisSnapshot]
-    I --> J[区间套 / LOCATES / 小转大]
-    J --> K[跨级别关系图]
-    K --> L[走势演化 / 完全分类状态机]
-    L --> M[都业华实战扩展层]
-    M --> N[策略配置 / CompositeSignal]
+    A[Market Data / Time Ledger] --> B[Geometric Structure\nFractal Stroke GeometricSegment]
+    B --> C[AnalysisContext / DecompositionPolicy]
+    C --> D[Movement Engine\nMovementType / StructureLevelGraph]
+    D --> E[CentralZone + Lifecycle]
+    D --> F[MovementCompletion Facts]
+    E --> G[Divergence Semantics]
+    G --> H[Divergence Evidence\nMACD / other estimators]
+
+    D --> I[TradingPoint Identity Engine]
+    E --> I
+    F --> I
+    G --> I
+
+    D --> J[Movement Evolution Engine]
+    E --> J
+    F --> J
+    G --> J
+
+    I --> K[Cross-Level Theory Relations]
+    D --> K
+    G --> K
+
+    I --> L[Quality Facts]
+    K --> L
+
+    D --> M[Du Yehua Practice Classifiers]
+    E --> M
+    G --> M
+    I --> M
+    K --> M
+
+    L --> N[Strategy Profiles / Decisions]
+    M --> N
+    K --> N
+
+    N --> O[CompositeSignal / Resonance]
 ```
 
-这张图是终局依赖关系，不代表当前开发顺序一次完成全部模块。
+关键约束：
+
+- `MovementEvolutionEngine` 与 `TradingPointIdentityEngine` **并列**；
+- `DuTerminationPattern` 不能成为 B1/B2/B3 的父节点；
+- B2/B3 可以反过来成为走势演化判断的重要事实，因此必须避免循环依赖。
 
 ---
 
-## 5. Layer 1：市场数据与时间完整性
-
-这一层只负责数据真实性和时间边界：
-
-- K 线周期合法；
-- open/close time 连续；
-- 历史锚点可验证；
-- 实时数据与回放数据使用相同时间语义；
-- 任何正式结构都不得引用确认时刻之后的数据。
-
-这是所有上层结构的硬前提。
-
----
-
-## 6. Layer 2：基础几何结构
+## 6. Layer A：市场数据、时间和正式证据账本
 
 职责：
 
-```text
-K线
-→ 包含处理
-→ 分型
-→ 笔
-→ 线段
-```
+- K 线周期合法；
+- 时间连续；
+- `open_time / close_time` 合法；
+- 历史锚点完整；
+- `as_of` 明确；
+- 候选结构与正式结构分离；
+- `confirmed_at` 不能早于真实可知时刻；
+- 结构 fingerprint 与证据身份绑定；
+- 回放与实时使用同一时间语义。
 
-必须支持：
-
-- 候选 / 正式结构分离；
-- 正式结构提交时间；
-- 结构身份指纹；
-- 尾部可变、正式前缀稳定；
-- 前缀一致性；
-- 无未来函数。
-
-这一层没有 B1/B2/B3，也没有策略参数。
+任何上层理论正确，如果这一层有未来函数，都视为不合格。
 
 ---
 
-## 7. Layer 3：中枢与走势
-
-职责：从正式结构建立：
-
-- 中枢；
-- 盘整；
-- 上涨；
-- 下跌；
-- 同级别走势关系。
-
-这里必须为后续状态演化预留：
-
-- 中枢延伸；
-- 中枢新生；
-- 中枢扩展 / 级别扩展。
-
-### 7.1 一个关键语义：级别扩展 ≠ 新的更大级别盘整
-
-未来状态机必须严格区分：
-
-#### A. 最后中枢发生级别扩展
-
-例如原 5m 趋势中的最后 5m 中枢扩展成更高级别中枢。
-
-此时关键语义是：**原走势内部结构仍在演化，不能仅凭“级别变大”就认定原趋势已经结束并切换到一个新走势。**
-
-#### B. 原趋势已经完成，随后形成更大级别盘整
-
-这里“更大级别盘整”中的“更大级别”是指：**转折后新生成的盘整，其结构级别高于原趋势级别**，例如 5m 趋势背驰后形成 30m 盘整。
-
-这属于：
+## 7. Layer B：几何结构
 
 ```text
-已完成的原趋势
-+
-后续新的更高级别盘整走势
+Raw Bar
+-> Inclusion
+-> Fractal
+-> Stroke
+-> GeometricSegment
 ```
 
-#### C. 原趋势已经完成，随后形成反趋势
+职责只有：
 
-这是另一条独立演化路径。
+> 把几何结构画对并稳定提交。
 
-这三种结构不得因为都出现“更高级别”而合并成同一种状态。
+禁止在这里提前塞入：
+
+- B1/B2/B3；
+- 次级别走势身份；
+- 共振；
+- 策略阈值。
 
 ---
 
-## 8. Layer 4：力度与背驰事实
+## 8. Layer C：走势分解、MovementType 与理论级别
 
-背驰必须独立成事实层，而不是直接写死在某个策略过滤器里。
+### 8.1 Movement 先于严格递归中枢
 
-至少区分：
+原著中：
 
-- 趋势背驰；
-- 盘整背驰；
-- 背驰段；
-- 价格新极值；
-- 力度比较；
-- MACD 等辅助证据。
+```text
+至少三个连续次级别走势类型重叠
+-> 高一级中枢
+```
 
-### 8.1 MACD 是证据，不是级别替代物
+因此严格递归引擎必须显式管理：
 
-MACD 可以用于当前级别力度判断，但不能因为某个 MACD 形态像低级别背驰，就把它当作真实 1m/5m 递归证据。
+- 低级别完成走势；
+- 高一级中枢；
+- 高一级盘整/趋势；
+- 再向上递归。
 
-### 8.2 原始指标事实与质量阈值分离
+### 8.2 `StructureLevelGraph`
 
-例如保存：
+至少支持：
+
+```text
+DIRECT_SUBLEVEL_OF
+DIRECT_SUPERLEVEL_OF
+COMPOSES
+COMPOSED_BY
+```
+
+这些是结构级别关系，不要等到后期 `CrossLevelTradingPointRelation` 才补。
+
+### 8.3 `MovementCompletionState`
+
+必须是独立状态：
+
+```text
+FORMING
+COMPLETION_CANDIDATE
+COMPLETED
+```
+
+如后续确实需要重组/重解释，不要物理删除旧事实，应使用版本化 `StructureInterpretation` 或新 analysis context。
+
+“出现 B1”与“某 Movement 已完成”高度相关，但二者不能共用同一个状态字段。
+
+### 8.4 `CentralZoneLifecycle`
+
+中枢生命周期属于核心结构，不应等到很后期才出现。
+
+至少预留：
+
+```text
+FORMING
+ESTABLISHED
+EXTENDING
+COMPLETED
+EXPANDED_TO_HIGHER_LEVEL
+```
+
+以及与“新生”的关系。
+
+Phase 早期可以先实现最小必要集，但数据模型必须能够表达延伸/新生/级别扩展。
+
+---
+
+## 9. Layer D：背驰语义与背驰证据分离
+
+### 9.1 `DivergenceFact`
+
+回答：
+
+> 理论上比较的是哪个走势、哪两段、什么级别、什么力度关系？
+
+建议包含：
+
+```text
+divergence_id
+semantic_type = TREND_DIVERGENCE | CONSOLIDATION_DIVERGENCE
+movement_id
+structure_level_ref
+comparison_leg_a
+comparison_leg_c
+price_extreme_fact
+completion_fact
+confirmed_at
+```
+
+### 9.2 `DivergenceEvidence`
+
+回答：
+
+> 用什么可计算证据支持/估计这个背驰？
+
+例如：
+
+```text
+CENTER_STRUCTURE_EVIDENCE
+MACD_HISTOGRAM_AREA
+MACD_DIFF_DEA
+MOVEMENT_POWER
+MA_AREA
+OTHER_ESTIMATOR
+```
+
+### 9.3 MACD 的位置
+
+原著明确将 MACD 描述为背驰的辅助判断方法，方便但不绝对精确。
+
+因此终局禁止：
+
+```text
+MACD 不满足
+=> ORIGINAL_THEORY 背驰必然不存在
+```
+
+如果当前实现只能依靠 MACD，应诚实标记为：
+
+```text
+construction_method = SEGMENT_APPROXIMATION
+identity_basis / evidence_method = PROJECT_POLICY_MACD_APPROXIMATION
+```
+
+而不是把指标算法升级为理论定义。
+
+### 9.4 原始事实优先
+
+质量与证据保存原始值，例如：
 
 ```text
 entry_area = 100
@@ -307,272 +512,177 @@ exit_area = 63
 ratio = 0.63
 ```
 
-而不是直接只保存：
+不要只保存：
 
 ```text
 strong_divergence = true
 ```
 
-因为未来不同 `QualityProfile` 可能使用 0.8、0.7、0.5 等不同门槛。
-
 ---
 
-## 9. Layer 5：走势终结机制
+## 10. Layer E：标准买卖点身份
 
-这一层回答：**一段走势如何结束或转入新的结构阶段？**
-
-在都业华实践层中，常见“四种终结方式”整理为：
-
-1. 中枢背驰；
-2. 盘整背驰；
-3. 小转大；
-4. 中枢无背驰。
-
-工程中应统一建模为 `TerminationMode` 或等价事实，但必须保留来源标签，避免把都业华实践分类误写成原著原生枚举。
-
-### 9.1 小转大不是孤立特殊补丁
-
-它属于终结机制分类中的一项，而不是：
-
-- 第四类买点；
-- B1/B2/B3 的额外子类型；
-- 单独的一套信号系统。
-
-### 9.2 小转大只有在真实跨级别数据存在后才能判定
-
-Phase 2 可以先预留 `TerminationMode.SMALL_TO_LARGE` 的数据模型，但不得在单级别阶段通过内部笔、内部线段或 MACD 猜测出“小转大”。
-
-真正判定必须等真实多级别结构与 Phase 4 跨级别证据完成。
-
----
-
-## 10. Layer 6：标准买卖点身份
-
-标准身份只保留：
+标准类型只有：
 
 ```text
 B1 / B2 / B3
 S1 / S2 / S3
 ```
 
-强一买、递归一买、共振一买、小一大二组合都不是新的标准买点类型。
+强一买、递归一买、共振一买、小一大二都不是新的标准类型。
 
-### 10.1 B1 身份与质量
+### 10.1 `TradingPointIdentity`
 
-B1 的身份底线由趋势及趋势背驰决定。
-
-当前单级别工程口径中，至少两个同级别中枢形成趋势是 B1 身份的一部分。
-
-因此：
-
-- 2 中枢趋势背驰：可以是 B1；
-- 3 中枢趋势背驰：仍然是 B1，只是质量事实更强；
-- 1 中枢后盘整背驰：不能仅通过策略配置改名为标准 B1。
-
-所以配置可以写：
+建议包含：
 
 ```text
-策略只接受 zone_count >= 3 的 B1
+trading_point_identity_id
+point_type
+structure_level_ref
+analysis_context_id
+construction_method
+identity_status
+identity_evidence_refs[]
+position/time/price
+confirmed_at
+rule_version
+fingerprint
 ```
 
-但不能把 B1 理论身份改成：
+### 10.2 `IdentityStatus`
 
 ```text
-zone_count >= 3 才存在 B1
+CONFIRMED
+REJECTED
+PENDING_IDENTITY_EVIDENCE
 ```
 
-### 10.2 B2 身份与质量
+`PENDING_IDENTITY_EVIDENCE` 专门表示：
 
-B2 的基础身份与“一类点之后的回抽不破一类点极值”等结构关系有关。
+> 严格理论身份所需的结构/跨级别证据还没有完成。
 
-而以下属于质量事实：
+它不能与策略等待状态混用。
 
-- 一买后的上涨是否重新进入前下降中枢；
-- 是否到达前中枢上沿 ZG；
-- 回调是否守住前中枢下沿 ZD；
-- 是否进一步守住 ZG；
-- 是否与 B3 同时成立。
+### 10.3 `IdentityBasis`
 
-因此：
+一个 `CONFIRMED` 身份还必须知道它按什么语义成立：
 
 ```text
-没有涨到 ZG
+ORIGINAL_THEORY_CANONICAL
+FIXED_LEVEL_OPERATIONAL
+SEGMENT_APPROXIMATION
 ```
 
-不能直接把一个基础 B2 标成 `REJECTED`；它只能导致某个“强 B2 策略”将其 `FILTERED`。
+这样当前项目可以继续产生实用信号，同时不冒充未来严格递归结果。
 
-### 10.3 B3 身份与质量
+---
 
-基础 B3：离开中枢后第一次回试不重新进入中枢。
+## 11. B1 / B2 / B3 的身份与质量边界
 
-例如买三基础边界：
+### 11.1 B1
 
-```text
-pullback_low >= ZG
-```
+原著核心：
 
-进一步的强度事实可以是：
-
-- 回调是否高于中枢内部最高波动；
-- 离开力度；
-- 回抽幅度；
-- 是否存在低级别买点构成。
+- 标准趋势至少包含两个同级别中枢；
+- 第一类买点与该级别趋势背驰直接相关；
+- 一个中枢后的盘整背驰不是标准趋势背驰 B1；超大级别可讨论“类一买”。
 
 因此：
 
 ```text
-低点 >= ZG
-但低点 < 中枢内部最高波动
+zone_count >= 2
 ```
 
-仍然可以是基础 B3，只是不满足“强 B3”质量口径。
+是形成“趋势”这一身份的理论底线。
 
----
-
-## 11. Layer 7：买卖点质量事实
-
-质量层只生产事实，不做策略最终裁决。
-
-建议每个质量事实至少包含：
-
-- `metric_name`；
-- `raw_value`；
-- `evidence_scope`；
-- `source_type`；
-- `evidence_refs`；
-- `computed_at`；
-- `rule_version`。
-
-### 11.1 `evidence_scope`
-
-质量事实必须显式标注证据范围。
-
-#### `SINGLE_LEVEL_OBSERVABLE`
-
-当前单级别就能可靠计算，例如：
-
-- B1 中枢数量；
-- 当前级别 MACD 面积比；
-- B2 反弹相对 ZD/ZG 的位置；
-- B2 回调相对 B1/中枢边界的位置；
-- B3 回调相对 ZG/中枢内部最高波动的位置。
-
-#### `CROSS_LEVEL_REQUIRED`
-
-必须等待真实低级别数据，例如：
-
-- 5m B1 末端内部是否存在真实 1m 盘背；
-- 5m B2 回调内部是否存在真实 1m B1；
-- 区间套定位结果；
-- 小转大；
-- 多级别买点共振。
-
-**任何 `CROSS_LEVEL_REQUIRED` 项，在 Phase 1 不允许通过同周期内部结构伪造。**
-
----
-
-## 12. Layer 8：真实多级别 AnalysisSnapshot
-
-未来每个真实分析层级独立计算：
+但：
 
 ```text
-1m AnalysisSnapshot
-5m AnalysisSnapshot
-30m AnalysisSnapshot
-...
+zone_count = 3 比 2 一定更强
 ```
 
-每个 Snapshot 必须有自己的：
+**不是原著定理。**
 
-- 数据范围；
-- interval；
-- structure identity；
-- 中枢；
-- 走势；
-- 背驰；
-- 买卖点；
-- 正式提交时间；
-- 版本与指纹。
-
-跨级别算法只能消费这些真实 Snapshot，不能消费“高级别内部笔”来替代低级别 Snapshot。
-
----
-
-## 13. Layer 9A：区间套、定位与小转大
-
-这一层在真实多级别结构可靠后实现。
-
-### 13.1 区间套
-
-流程是：
+工程上保存：
 
 ```text
-高级别已经识别出背驰范围
-→ 进入真实次级别寻找对应背驰范围
-→ 继续向更低级别收缩
-→ 得到更精确的时间 / 价格定位
+zone_count = 2 / 3 / ...
 ```
+
+如果都业华课程经核验认为某种中枢数量、末端盘背等代表更高质量，再由 `DuQualityEvaluator` 解释。
+
+### 11.2 B2
+
+原著基础事实：
+
+- B1 以后出现后续次级别走势；
+- 第一类买点后的第二段次级别走势低点构成第二类买点；
+- **任何级别的第二类买卖点由直接次级别相应走势的第一类买卖点构成。**
+
+因此在 `ORIGINAL_THEORY_CANONICAL` 模式下：
+
+```text
+DIRECT_SUBLEVEL_B1_CONSTITUTION
+```
+
+属于 B2 的 `IdentityEvidence`。
 
 它不是：
 
 ```text
-从全市场所有最小级别买点开始
-→ 盲目向上猜哪个最终会成为高级别买点
+有就更强，没有也一样 canonical
 ```
 
-### 13.2 `LOCATES` 在 Phase 4 首次产生
+当前单层 `B1 -> rebound segment -> retrace segment -> 不破 B1` 可以保留为 `SEGMENT_APPROXIMATION`，但不得宣称已经满足 strict canonical B2 provenance。
 
-`LOCATES` 的语义是：
+B2 的下列空间信息属于 Quality/Evolution Facts，而不是基础身份边界：
+
+- 上涨是否重新进入前下降中枢；
+- 是否到达 ZG；
+- 回调是否守 B1；
+- 是否守 ZD；
+- 是否守 ZG；
+- 是否与 B3 重合。
+
+所以：
 
 ```text
-低级别背驰 / 买点
-LOCATES
-高级别背驰范围 / 买点位置
+B2 没涨到 ZG
 ```
 
-**Phase 4 必须完整实现 `LOCATES` 的生成、证据绑定和验证。**
+不能因此被标记为理论 `REJECTED`。
 
-Phase 5 不再第二次“实现 LOCATES”，而是把已经可靠存在的 `LOCATES` 纳入统一跨级别关系图。
+### 11.3 B3
 
-### 13.3 小转大
-
-小转大由：
-
-- 低级别背驰；
-- 高级别当前结构；
-- 后续中枢 / 第三类买卖点等必要结构关系
-
-共同决定。
-
-它属于 `TerminationMode`，但它的 classifier 实现依赖本层真实跨级别证据。
-
----
-
-## 14. Layer 9B：完整跨级别关系图
-
-这一层不重新计算各级别买点，而是组织已经成立的事实之间的关系。
-
-至少预留：
-
-### 14.1 `CONSTITUTES`
-
-构成关系。
-
-典型理论关系：
+原著 strict 定义使用：
 
 ```text
-低一级 B1
-→ CONSTITUTES →
-高一级 B2
+一个次级别走势向上离开中枢
++
+另一个次级别走势第一次回试
++
+low >= ZG
 ```
 
-### 14.2 `LOCATES`
+卖三镜像：
 
-由 Phase 4 区间套模块生成，本层负责统一存储、查询、组合与审计。
+```text
+high <= ZD
+```
 
-### 14.3 `COINCIDES`
+因此：
 
-同一时间 / 价格区域存在多个已经独立成立的买点身份，例如：
+- `ZG/ZD` 是标准 B3 身份边界；
+- `GG/DD` 或“中枢所有波动最高/最低边界”不是标准 B3 基础边界；
+- “强三买不与中枢任一波动重叠”应放 Practice/Quality，精确等号与计算范围在课程未直接核验前保持未验证状态。
+
+严格 B3 的 departure/retest constituent 应是相应次级别 `MovementType`。
+
+当前用两个 `GeometricSegment` 表示 departure/retest，可以作为 `SEGMENT_APPROXIMATION`，但不是终局 strict representation。
+
+### 11.4 多身份必须允许并存
+
+同一个时间/价格区域可以同时存在：
 
 ```text
 1m B1
@@ -580,112 +690,466 @@ Phase 5 不再第二次“实现 LOCATES”，而是把已经可靠存在的 `LO
 5m B3
 ```
 
-这不是一个新买点，而是身份重合关系。
+B2 与 B3 可以同点。
 
-### 14.4 `SYNCHRONOUS_WITH`
-
-用于表达多个级别买卖点在定义好的时间 / 结构窗口中同步出现。
-
-这是工程关系名，上层可据此派生“共振”。
-
-### 14.5 共振不是底层原子类型
-
-工程上：
+领域模型必须允许：
 
 ```text
-多个买点事实
-+
-跨级别关系
-+
-时间 / 价格同步规则
-→ CompositeSignal: Resonance
+one structural position -> many TradingPointIdentity
 ```
 
-底层关系不能因为上层定义了“钻石共振”等策略名称而改变。
+而不是要求一个位置只能有一个 enum。
 
 ---
 
-## 15. Layer 10：走势演化与完全分类状态机
+## 12. Identity / Quality / Strategy 三层硬隔离
 
-终局系统不能只回答“这里有没有 B3”，还应回答：
+```text
+TradingPointIdentityEngine
+        ↓
+TradingPointIdentity + IdentityEvidence
+        ↓
+QualityEvaluator
+        ↓
+QualityFacts
+        ↓
+StrategyFilter + Profiles
+        ↓
+StrategyDecision
+```
 
-- 当前走势已确认到什么状态；
-- 后续理论上允许哪些结构分支；
-- 哪些分支已经被排除；
-- 中枢在延伸、新生还是扩展；
-- 原趋势是否已经完成；
-- 背驰后属于哪一种结构演化。
+### 12.1 Identity 只回答“是不是”
 
-### 15.1 背驰后演化必须保留三种不同语义
+禁止 QualityProfile 进入 canonical identity detector 改写理论定义。
 
-状态机至少要能区分：
+### 12.2 Quality 只回答“具有哪些质量事实”
 
-1. **最后中枢级别扩展**：原走势内部继续演化；
-2. **原趋势完成 → 更大级别盘整**：后续新盘整的结构级别高于原趋势级别；
-3. **原趋势完成 → 反趋势**：产生新的反向趋势走势。
+例如：
 
-“更大级别盘整”中的“更大级别”是级别提升，不是“价格区间更宽”或“持续时间更长”的俗称。
+- B1 中枢数量；
+- MACD 比率；
+- B2 反弹相对 ZD/ZG 的位置；
+- B2 回调位置；
+- B3 回调距 ZG 的距离；
+- 是否高于中枢所有内部波动；
+- 是否存在额外低级别实践证据。
 
-此层是后期工程，当前不开发。
+### 12.3 `EvidenceScope`
+
+```text
+SINGLE_LEVEL_OBSERVABLE
+CROSS_LEVEL_IDENTITY_REQUIRED
+CROSS_LEVEL_QUALITY_OPTIONAL
+```
+
+三者必须分开。
+
+例：
+
+```text
+严格 B2 的直接次级别 B1
+= CROSS_LEVEL_IDENTITY_REQUIRED
+```
+
+而：
+
+```text
+策略额外要求 1m/5m 共振
+= CROSS_LEVEL_QUALITY_OPTIONAL / SignalProfile
+```
+
+### 12.4 Strategy 只回答“当前策略要不要”
+
+```text
+ACCEPTED
+FILTERED
+WAITING_FOR_STRATEGY_EVIDENCE
+```
+
+`REJECTED` 只属于 IdentityStatus。
+
+例如：
+
+```text
+基础 B3 已成立
+但策略只做强三买
+该 B3 未满足强三买条件
+=> FILTERED
+```
+
+绝不能：
+
+```text
+=> REJECTED B3
+```
 
 ---
 
-## 16. Layer 11：都业华实战扩展层
+## 13. Cross-Level Theory Relations
 
-在标准结构、走势终结、买卖点和跨级别关系稳定后，再逐项加入：
+跨级别关系必须拆细。
 
-- B1/B2/B3 强弱体系；
-- 类二买；
-- 分型重构买点；
-- R 比率；
-- 黄金分割；
+### 13.1 `DIRECTLY_CONSTITUTES`
+
+直接构成关系。
+
+典型：
+
+```text
+B1@direct-sublevel
+-> DIRECTLY_CONSTITUTES ->
+B2@higher-level
+```
+
+这条来自原著买卖点定律一。
+
+“direct”不能丢，否则会把“任意更低级别买点承载高级别极值”混进来。
+
+### 13.2 `REALIZES_EXTREMUM_OF`
+
+表示：
+
+```text
+某个次级别以下的买卖点
+承载/实现
+更高级别买卖点的极限位置
+```
+
+原著买卖点级别定理说明，大级别买卖点必然是次级别以下某一级别的买卖点，但不保证恰好是直接次级别。
+
+这与 `DIRECTLY_CONSTITUTES` 不同。
+
+### 13.3 `NARROWS_TO`
+
+区间套过程关系：
+
+```text
+HigherLevelDivergenceSegment
+-> NARROWS_TO ->
+LowerLevelDivergenceSegment
+```
+
+用于记录逐级收缩过程。
+
+### 13.4 `LOCATES`
+
+区间套最终定位结果：
+
+```text
+terminal lower-level divergence/point
+-> LOCATES ->
+higher-level turning region / extremum
+```
+
+不要让一个泛化 `LOCATES` 同时承担整个递归过程与最终定位结果。
+
+### 13.5 `COINCIDES`
+
+多个已经独立成立的买点身份处于同一结构位置/定义好的同一区域。
+
+这可以是底层客观关系，但“同一区域”的工程容差必须版本化。
+
+### 13.6 共振不作为 canonical 原子边
+
+原著确实存在“不同级别同步共振”的概念，但程序必须面对：
+
+- 多长时间算同步；
+- 是否必须同一极值；
+- 是否允许若干 bar 的窗口。
+
+这些存在 profile 语义，因此建议：
+
+- 底层保留时间/价格事实和 `COINCIDES`；
+- `SYNCHRONOUS_WITH` 如果存在，必须 profile-versioned；
+- 最终“共振”由 `CompositeSignal` 派生。
+
+---
+
+## 14. 区间套
+
+### 14.1 理论方向
+
+区间套是：
+
+```text
+已经确定高级别背驰段
+-> 在真实次级别找到其中对应背驰段
+-> 继续向更低级别收缩
+-> 定位更精确转折区域
+```
+
+不是：
+
+```text
+从全市场最低级别所有买点开始
+-> 盲目向上猜哪个将成为高级别买点
+```
+
+### 14.2 区间套与买点构成不是一回事
+
+区间套回答：
+
+> 转折在哪里更精确？
+
+`DIRECTLY_CONSTITUTES` 回答：
+
+> 高级别 B2 由什么直接次级别买点构成？
+
+二者必须使用不同 relation type 和不同测试。
+
+### 14.3 区间套依赖真实层级
+
+`NARROWS_TO / LOCATES` 只能消费真实下级 `Movement/Divergence` 结果。
+
+禁止：
+
+- 用 5m Segment 内的 5m Stroke 冒充真实 1m；
+- 用 MACD 形态猜一个虚构的低级别背驰段。
+
+---
+
+## 15. Movement Evolution：与买卖点引擎并列
+
+### 15.1 不能使用 `TerminationMode -> TradingPoint`
+
+B1、B2、B3 的理论来源不同：
+
+- B1 与趋势完成/背驰相关；
+- B2 与 B1 后次级别走势及直接次级别 B1 构成相关；
+- B3 与中枢离开和第一次次级别回试相关。
+
+因此终局采用：
+
+```text
+Movement / CentralZone / Divergence / Completion Facts
+             ├-> TradingPointIdentityEngine
+             └-> MovementEvolutionEngine
+```
+
+### 15.2 背驰后三类结果：必须区分“哪个对象完成”
+
+原著第29课与第43课需要一起理解。
+
+#### 共同前提
+
+发生该级别趋势背驰后：
+
+```text
+source movement at that level = TERMINATED / COMPLETED
+```
+
+这是第43课明确语义。
+
+#### A. 最后中枢级别扩展
+
+不能写成：
+
+```text
+原级别趋势继续 ACTIVE
+```
+
+但也不能粗暴写成：
+
+```text
+原趋势完成 + 一个独立新 higher-level consolidation
+```
+
+更准确的是：
+
+- 原级别 source movement 已终止；
+- 最后中枢扩展会引发更高级别的重新组合/重新归属；
+- **包含该 source movement 的更高级别 movement 仍可能处于 FORMING 状态**；
+- 这与“两个已完成走势类型的连接：下跌 + 更高级别盘整”不同。
+
+因此状态机必须区分：
+
+```text
+source_movement_completion
+```
+
+和：
+
+```text
+containing_higher_level_movement_completion
+```
+
+不能只有一个全局 `trend_active` 布尔值。
+
+#### B. 更大级别盘整
+
+表示：
+
+```text
+已完成 source trend
++
+随后一个独立的、更高结构级别盘整走势
+```
+
+原著明确要求这里的盘整中枢级别高于前趋势的中枢级别。
+
+#### C. 反趋势
+
+表示：
+
+```text
+已完成 source trend
++
+随后形成反向趋势走势
+```
+
+反趋势可以是同级别或以上级别，具体由后续结构决定。
+
+### 15.3 完全分类属于后续状态机
+
+最终 `MovementEvolutionEngine` 应回答：
+
+- source movement 是否完成；
+- 当前 higher-level containing movement 是否完成；
+- 中枢延伸/新生/扩展；
+- 哪些后继分支仍合法；
+- 哪些分支已排除。
+
+这不是 TradingPointDetector 的职责。
+
+---
+
+## 16. 原著跨级别转折与都业华“小转大”分开
+
+### 16.1 `OriginalCrossLevelTurnFact`
+
+描述原著层的事实：
+
+- 当前走势级别与背驰级别不同；
+- 小级别背驰可以通过后续结构演化，最终引发更大级别转折；
+- 大级别买卖点的极值可以落在直接次级别以下更小级别买卖点上。
+
+这是 `ORIGINAL_THEORY`。
+
+### 16.2 `DuTerminationPattern.SMALL_TO_LARGE`
+
+都业华课程中“小转大”是一种实践终结模式，常见描述是：
+
+> 本级别没有形成相应背驰，但内部小级别背驰导致本级别走势直接发生终结/转折。
+
+目前能直接确认课程确有“小转大及应对方法”“四种终结模式”等主题；精确算法细节仍需逐条核验。
+
+因此：
+
+```text
+OriginalCrossLevelTurnFact
+!=
+DuTerminationPattern.SMALL_TO_LARGE
+```
+
+前者可以成为后者的输入证据，但不要共享同一个理论枚举并宣称同义。
+
+---
+
+## 17. 都业华 Practice Layer
+
+### 17.1 `DuTerminationPattern`
+
+在取得足够原课程算法证据前，使用明确命名：
+
+```text
+DuTerminationPattern
+```
+
+而不是把以下四项直接写成原著核心 `TerminationMode`：
+
+1. 中枢背驰；
+2. 盘整背驰；
+3. 小转大；
+4. 中枢无背驰直接终结。
+
+课程目录能确认存在“四种终结模式”，多个二手资料对四项内容高度一致；精确分类条件仍属于 Practice Layer。
+
+### 17.2 强弱体系
+
+强弱评价只消费已经存在的身份/结构事实。
+
+例如：
+
+#### B1 Quality Facts
+
+- `zone_count`；
+- 背驰证据强度；
+- 是否存在额外低级别盘背；
 - 分型停顿；
-- 三买后走势分类；
-- 大小周期组合；
-- 其他课程实战规则。
+- R 比率等。
 
-### 16.1 实战扩展不能反向污染标准身份
+注意：
 
-例如：
+```text
+zone_count = 3
+```
 
-- “类二买”不是 B4；
-- “分型重构买点”不允许偷偷改写标准 B1/B2/B3；
-- R 比率、黄金分割是质量 / 交易过滤证据，不是标准身份定义；
-- “小一 + 大三”是组合模式，不是新的 `TradingPointType`。
+只是客观事实。
+
+“3 中枢一定比 2 中枢更强”只有在都业华课程明确核验后，才能写成 Practice Rule，不能写成 ORIGINAL_THEORY。
+
+#### B2 Quality Facts
+
+- 一买后反弹是否进入前中枢；
+- 是否到 ZG；
+- 回调守 B1 / ZD / ZG；
+- 回调幅度；
+- 与 B3 是否重合。
+
+#### B3 Quality Facts
+
+- 基础 `low >= ZG` 已满足；
+- 是否进一步不与中枢任何内部波动重叠；
+- 离开力度；
+- 回抽幅度；
+- 成交活跃度等。
+
+### 17.3 非标准实践买点
+
+预留独立 pattern namespace：
+
+```text
+NonStandardTradingOpportunity
+```
+
+可以容纳：
+
+- 原著大级别“类一买/类二买”；
+- 都业华类二买；
+- 分型重构买点。
+
+不要增加 `B4/B5`，也不要修改标准 B1/B2/B3 定义。
 
 ---
 
-## 17. Layer 12：配置与组合信号
+## 18. Strategy 与 CompositeSignal
 
-这是最上层。
+### 18.1 `QualityProfile`
 
-### 17.1 `QualityProfile`
+控制：
 
-控制“已经成立的买卖点至少要多强，策略才接受”。
+> 已经成立的买卖点达到什么质量，策略才接受。
 
-例如：
+例如当前用户可配置：
 
-- B1：基础身份至少 2 中枢；策略只接受 `zone_count >= 2` 或 `>= 3`；
-- B1：是否要求更强的 MACD 背驰比；
-- B1：是否要求真实低级别末端盘背；
-- B2：反弹至少达到前中枢什么位置；
-- B2：回调最低守住 B1、ZD 还是 ZG；
-- B3：基础守 ZG；策略是否进一步要求不与中枢内部任何波动重叠。
+- B1：接受 `zone_count >= 2` 或只接受 `>= 3`；
+- B1：MACD evidence ratio 门槛；
+- B2：反弹至少到前中枢什么位置；
+- B2：回调最低守哪条边界；
+- B3：接受基础守 ZG，还是只接受强三买。
 
-**`QualityProfile` 不得传入 TradingPointDetector 改变标准身份。**
+这些配置**不能进入 canonical detector 改身份**。
 
-### 17.2 `LocalizationProfile`
+### 18.2 `LocalizationProfile`
 
-控制策略要求的定位精度，例如：
+控制：
 
-- 单级别定位即可；
-- 必须向下定位一级；
-- 必须区间套到 1m；
-- 允许跨过直接次级别绑定更低级别定位结果。
+- 是否需要区间套；
+- 最低定位到什么级别；
+- 是否接受固定级别 operational 定位；
+- 是否必须 strict recursive provenance。
 
-这同样是策略门槛，不改变高级别买点是否客观成立。
-
-### 17.3 `SignalProfile`
+### 18.3 `SignalProfile`
 
 控制上层组合，例如：
 
@@ -693,192 +1157,258 @@ Phase 5 不再第二次“实现 LOCATES”，而是把已经可靠存在的 `LO
 - 小一 + 大三；
 - 小一 + 大二三；
 - 多级别 B1 同步；
-- 某种终结方式 + 某种质量组合。
+- 某种 Du 终结模式 + 某种买点质量。
 
-### 17.4 不建立“市场转折事件”作为底层实体
+### 18.4 `CompositeSignal`
 
-如果未来需要统一输出，可使用：
-
-```text
-CompositeSignal
-```
-
-它只是以下事实的组合视图：
-
-- 已成立买卖点；
-- 已成立终结方式；
-- 已验证跨级别关系；
-- 质量事实；
-- 当前策略配置。
-
-例如：
+只读派生视图：
 
 ```text
-1m B1 + 5m B2 + 5m B3
-→ CompositeSignal: 小一 + 大二三
+TradingPointIdentity[]
++
+CrossLevelRelations[]
++
+QualityFacts[]
++
+PracticePatterns[]
++
+StrategyProfile
+-> CompositeSignal
 ```
 
-CompositeSignal 绝不能反向修改底层买卖点身份。
+它不能反向修改底层事实。
+
+不建立底层 `MarketReversalEvent` 作为 canonical 实体。
 
 ---
 
-## 18. 配置系统硬约束
+## 19. 当前项目路径的准确定位
 
-### 18.1 不可配置：理论身份与工程正确性不变量
+### 19.1 当前单级别路径仍然有价值
 
-例如：
-
-- 正式结构身份；
-- 无未来函数；
-- 正式提交时间；
-- 标准买卖点类型集合；
-- B1 的最低趋势身份条件；
-- B3 的基本中枢关系；
-- 真实跨级别必须使用真实低级别 Snapshot；
-- 缺关键证据 fail closed。
-
-### 18.2 可配置：质量与策略门槛
-
-例如：
-
-- 只接受 2 中枢还是 3 中枢以上的 B1；
-- MACD 背驰比要求；
-- 是否要求真实低级别末端盘背；
-- B2 反弹高度和回调深度；
-- B3 是接受基础守 ZG，还是只接受“不与中枢内部任一波动重叠”的强三买；
-- 是否要求区间套定位；
-- 是否只接受特定跨级别组合。
-
-### 18.3 禁止的实现方式
-
-禁止：
+当前项目已经实现/正在 PR #13 中实现：
 
 ```text
-TradingPointDetector(config)
+当前 interval K线
+-> Stroke
+-> GeometricSegment
+-> SegmentCentralZone
+-> 单层 B1/B2/B3
 ```
 
-然后因为“策略要求更强”把基础买点改成 `REJECTED`。
+这条路径可以继续作为可用 MVP。
 
-推荐：
+但长期必须正式标注：
 
 ```text
-identity = TradingPointDetector(structure)
-quality  = QualityEvaluator(identity, structure, cross_level_evidence?)
-decision = StrategyFilter(identity, quality, config)
+construction_method = SEGMENT_APPROXIMATION
+source_type = PROJECT_POLICY
 ```
 
-### 18.4 每次评价必须可审计
+而不是声称：
 
-最终至少能回答：
+```text
+已经严格实现 ORIGINAL_THEORY 的 direct-sublevel Movement recursion
+```
 
-- 为什么它是 B1/B2/B3；
-- 使用哪些结构证据确定身份；
-- 原始质量事实是什么；
-- 哪些质量事实是单级别可观测；
-- 哪些事实必须依赖真实跨级别数据；
-- 使用哪个配置版本；
-- 当前策略为什么 `ACCEPTED`、`FILTERED` 或等待证据。
+### 19.2 PR #13 已经做对的事情
+
+必须保留：
+
+- 不再使用 `segment.strokes` 冒充真实低级别；
+- 单级别 detector 只消费同层 Segment / SegmentCentralZone；
+- 正式提交时间和 fingerprint 证据继续 fail closed；
+- B3 基础边界使用 ZG/ZD；
+- B2/B3 可以在未来允许重合。
+
+### 19.3 PR #13 的真实技术债
+
+#### TD-1：MACD hard gate
+
+当前 B1 把 MACD 柱面积背驰作为正式身份 hard gate。
+
+终局应拆为：
+
+```text
+DivergenceFact
++
+MacdEvidence
+```
+
+在拆除前，当前 B1 只能被称为：
+
+```text
+PROJECT_POLICY_MACD_SEGMENT_APPROXIMATION
+```
+
+不能代表所有 `ORIGINAL_THEORY` B1。
+
+#### TD-2：SegmentCentralZone 不是 canonical MovementCentralZone
+
+未来递归上线时新增 canonical 中枢本体，不要直接复用 constituent=Segment 的语义。
+
+#### TD-3：当前 B2 是 operational approximation
+
+当前：
+
+```text
+B1 + rebound Segment + first retrace Segment + 不破 B1
+```
+
+可以继续用于 MVP。
+
+但 strict B2 还需要：
+
+```text
+DIRECTLY_CONSTITUTES(direct-sublevel B1, higher-level B2)
+```
+
+#### TD-4：当前 B3 是 operational approximation
+
+`low >= ZG` 边界正确，但 departure/retest 的 canonical constituent 应是次级别 MovementType，而不是仅 GeometricSegment。
+
+#### TD-5：旧 TrendDivergence 模型过度耦合
+
+未来应拆：
+
+```text
+DivergenceFact
+IndicatorEvidence
+CrossLevelEvidence
+```
+
+不要继续把 MACD、旧伪递归字段和理论背驰语义塞在一个对象里。
 
 ---
 
-## 19. 推荐开发顺序
+## 20. 推荐开发顺序
 
-终局架构一次设计清楚，但实现严格分期。
+终局模型现在设计清楚，但实现必须渐进。
 
-### Phase 1：单级别标准买卖点 + 质量事实 + 配置过滤 —— 当前优先
+### Phase 0：数据与无未来函数基础 —— 已有基础，持续加固
+
+- 时间连续性；
+- commit ledger；
+- `confirmed_at`；
+- fingerprint；
+- MacdAnchor；
+- prefix consistency；
+- realtime/replay 一致。
+
+### Phase 1：当前可用单层 MVP 收口 —— 近期优先
+
+目标不是重写全部理论，而是把现有单层产品做成“诚实、可配置、可审计”的 operational 模式。
 
 只做：
 
-- 继续加固基础结构正确性；
-- 同级别中枢 / 趋势 / 背驰证据；
-- B1/B2/B3、S1/S2/S3 基础身份；
-- `SINGLE_LEVEL_OBSERVABLE` 质量事实；
-- `QualityProfile`；
-- `StrategyFilter`；
-- 审计证据与配置版本；
-- 真实行情验证；
-- 前缀一致性；
-- 无重绘验证。
+- 保留 `SEGMENT_APPROXIMATION` detector；
+- 明确 `IdentityBasis=SEGMENT_APPROXIMATION`；
+- 拆出 `QualityFacts`；
+- 实现 `QualityProfile`；
+- 实现 `StrategyFilter`；
+- B1 中枢数、MACD 比率；
+- B2 反弹/回调空间位置；
+- B3 基础/强三买质量事实；
+- `REJECTED` 与 `FILTERED` 分离；
+- 真实行情、前缀一致性、无重绘测试。
 
-**明确不做：**
+**此阶段不伪造：**
 
-- 真实递归；
+- direct-sublevel B1；
+- 真实低级别盘背；
 - 区间套；
 - 小转大；
-- 真实低级别末端盘背；
-- 多级别共振；
-- 完整走势状态机。
+- 共振。
 
-### Phase 2：单级别可判定的走势终结与中枢状态
+### Phase 2：DecompositionContext + MovementType + canonical CentralZone 基础
 
 实现：
 
-- 中枢状态事实；
-- 趋势背驰终结；
-- 盘整背驰相关事实；
-- 单级别能可靠判断的终结证据；
-- `TerminationMode` 数据模型。
+- `AnalysisContext`；
+- `DecompositionPolicy`；
+- `MovementType`；
+- `MovementCompletionState`；
+- `MovementCentralZone`；
+- `CentralZoneLifecycle` 最小必要集；
+- 固定级别同级别分解的唯一性测试。
 
-`SMALL_TO_LARGE` 只预留枚举 / 接口，不在此阶段生成正式事实。
+目的：
 
-### Phase 3：真实多级别 AnalysisSnapshot
+> 先有真正的走势本体，再谈 strict recursion。
 
-实现：
-
-- 独立 1m / 5m / 30m 等 Snapshot；
-- 时间范围映射；
-- 级别间数据身份、版本、指纹绑定；
-- 各级别先独立算对。
-
-此阶段暂不急于做共振或区间套。
-
-### Phase 4：区间套 + `LOCATES` + 小转大
-
-在真实多级别结构可靠后：
-
-- 高级别背驰段逐级向下定位；
-- 正式生成和验证 `LOCATES`；
-- 小背驰—大转折所需跨级别证据；
-- 正式实现 `TerminationMode.SMALL_TO_LARGE` classifier。
-
-**Phase 4 是 `LOCATES` 的首次实现阶段。**
-
-### Phase 5：完整跨级别关系图
-
-把已经存在的 `LOCATES` 纳入统一关系图，并新增：
-
-- `CONSTITUTES`；
-- `COINCIDES`；
-- `SYNCHRONOUS_WITH` 所需基础事实；
-- 关系查询、组合、审计、版本绑定。
-
-**Phase 5 不重复实现 `LOCATES` 算法。**
-
-### Phase 6：走势完全分类 / 演化状态机
+### Phase 3：Divergence Semantics + canonical B1
 
 实现：
 
-- 中枢延伸 / 新生 / 扩展后的状态变化；
-- 原走势是否完成；
-- 背驰后的合法演化分支；
-- “最后中枢扩展”与“新生成更大级别盘整”的严格区分；
-- B3 后走势分类；
-- 已确认 / 待确认 / 已排除分支。
+- `TrendDivergence` 语义；
+- `ConsolidationDivergence`；
+- `DivergenceEvidence`；
+- MACD 从语义中解耦；
+- canonical B1 identity；
+- operational B1 与 canonical B1 可以双轨回测。
 
-### Phase 7：都业华实战扩展
+### Phase 4：严格 Structure Level 递归
 
-逐项、逐证据实现：
+实现：
 
+- `StructureLevelGraph`；
+- `DIRECT_SUBLEVEL_OF`；
+- completed lower-level Movement -> higher-level CentralZone；
+- 高一级 Movement 递归生成；
+- `STRICT_RECURSIVE` provenance；
+- 与 fixed-level operational context 并存。
+
+这一步之后才有资格声称“真实理论递归”。
+
+### Phase 5：strict B2 / B3 + Identity Cross-Level Relations
+
+实现：
+
+- B2 的 direct-sublevel B1 `DIRECTLY_CONSTITUTES`；
+- B3 的 direct-sublevel departure/retest；
+- `PENDING_IDENTITY_EVIDENCE`；
+- B2+B3 同点；
+- `REALIZES_EXTREMUM_OF`；
+- 多身份审计。
+
+### Phase 6：区间套
+
+实现：
+
+- `DivergenceSegment`；
+- `NARROWS_TO`；
+- 最终 `LOCATES`；
+- `LocalizationProfile`；
+- 逐级证据绑定。
+
+### Phase 7：Movement Evolution 完整状态机
+
+实现：
+
+- source movement completion；
+- containing higher-level movement state；
+- 中枢延伸/新生/扩展；
+- 背驰后三类演化；
+- B3 后演化；
+- 合法/待确认/已排除分支。
+
+### Phase 8：Original Cross-Level Turn + Du Practice
+
+先实现原著跨级别转折事实，再逐项接都业华：
+
+- `OriginalCrossLevelTurnFact`；
+- `DuTerminationPattern`；
+- 小转大；
+- 四种终结模式；
 - 类二买；
 - 分型重构；
-- R 比率；
-- 黄金分割；
 - 分型停顿；
-- 其他课程实战规则。
+- R 比率；
+- 黄金分割等。
 
-每项必须标明来源与 `evidence_scope`，并独立测试。
+每一项都必须独立来源、独立测试。
 
-### Phase 8：共振与组合信号
+### Phase 9：共振与 CompositeSignal
 
 最后实现：
 
@@ -887,156 +1417,227 @@ decision = StrategyFilter(identity, quality, config)
 - 小一 + 大二三；
 - 多级别同步；
 - 自定义 `SignalProfile`；
-- `CompositeSignal`。
+- CompositeSignal。
 
-组合信号只消费底层事实，不重新计算或重新定义底层结构。
-
----
-
-## 20. 每次新增功能前的架构检查
-
-任何新规则进入代码前，必须回答：
-
-1. 它是基础结构事实吗？
-2. 它是中枢 / 走势状态吗？
-3. 它是力度 / 背驰事实吗？
-4. 它是走势终结机制吗？
-5. 它是标准 B1/B2/B3 身份条件吗？
-6. 它只是买点质量事实吗？
-7. 它是 `SINGLE_LEVEL_OBSERVABLE` 还是 `CROSS_LEVEL_REQUIRED`？
-8. 它属于跨级别构成 / 定位 / 重合关系吗？
-9. 它属于都业华实践扩展吗？
-10. 它只是策略过滤条件吗？
-11. 它只是上层组合信号吗？
-
-如果无法明确归类，**不得直接写进 TradingPointDetector。**
+组合信号只消费底层事实。
 
 ---
 
-## 21. 理论依据索引
+## 21. Architecture Invariants
 
-### 21.1 缠中说禅原著 / 定理镜像
+以下原则建议写入未来架构测试/规则测试，避免后续 reviewer 或实现者再次改错。
 
-> 注：以下链接为公开原文镜像 / 整理站。架构引用以原著课程编号和定理主题为核心，不把镜像站视为理论作者。
+### 21.1 级别与周期
 
-1. **中枢、盘整、趋势、走势终完美及第二类买点相关基础**  
-   《教你炒股票17：走势终完美》：  
-   https://iczsc.com/read/017/  
-   定理整理：https://iczsc.com/theorems/003/
+```text
+MarketInterval != StructureLevelRef
+MarketInterval != OperationLevel
+```
 
-2. **中枢延伸、级别扩展、第三类买卖点**  
-   《教你炒股票20：缠中说禅走势中枢级别扩张及第三类买卖点》：  
-   https://iczsc.com/read/020/  
-   定理整理：https://iczsc.com/theorems/005/
+### 21.2 走势与线段
 
-3. **三类买卖点完备性、B2/B3 位置与后续意义**  
-   《教你炒股票21：缠中说禅买卖点分析的完备性》：  
+```text
+GeometricSegment != MovementType
+```
+
+除非存在显式：
+
+```text
+representation_of = completed_movement_id
+```
+
+### 21.3 中枢
+
+```text
+STRICT_RECURSIVE CentralZone
+must be composed of completed direct-sublevel MovementType
+```
+
+### 21.4 B1
+
+```text
+Trend requires >= 2 same-level central zones
+MACD alone must not define ORIGINAL_THEORY divergence
+```
+
+### 21.5 B2
+
+```text
+Canonical B2
+must have DIRECT_SUBLEVEL B1 constitution provenance
+```
+
+### 21.6 B3
+
+```text
+Canonical B3
+= first direct-sublevel retest after departure
+and uses ZG/ZD as standard boundary
+```
+
+### 21.7 Identity / Quality / Strategy
+
+```text
+QualityProfile must never change TradingPointIdentity
+```
+
+### 21.8 跨级别
+
+```text
+DIRECTLY_CONSTITUTES != REALIZES_EXTREMUM_OF
+NARROWS_TO != LOCATES
+```
+
+### 21.9 无伪递归
+
+```text
+same-interval internal Stroke/Segment
+must never masquerade as a real lower-level AnalysisContext
+```
+
+### 21.10 共振
+
+```text
+Resonance is derived / profile-versioned
+not a new TradingPointType
+```
+
+---
+
+## 22. 每次新增功能前的归类检查
+
+任何新规则进入代码前必须回答：
+
+1. 它是 Market Data / Time Fact 吗？
+2. 它是 Geometric Structure 吗？
+3. 它属于 `AnalysisContext / DecompositionPolicy` 吗？
+4. 它是 `MovementType` / `CentralZone` 事实吗？
+5. 它是 `MovementCompletion` / Evolution Fact 吗？
+6. 它是 `DivergenceFact` 还是 `DivergenceEvidence`？
+7. 它是标准 B1/B2/B3 的 IdentityEvidence 吗？
+8. 它只是 QualityFact 吗？
+9. 它是 `SINGLE_LEVEL_OBSERVABLE`、`CROSS_LEVEL_IDENTITY_REQUIRED` 还是 `CROSS_LEVEL_QUALITY_OPTIONAL`？
+10. 它是 `DIRECTLY_CONSTITUTES / REALIZES_EXTREMUM_OF / NARROWS_TO / LOCATES / COINCIDES` 中哪类关系？
+11. 它属于 `ORIGINAL_THEORY` 还是 `DU_YEHUA_PRACTICE`？
+12. 它只是 StrategyFilter 条件吗？
+13. 它只是 CompositeSignal 吗？
+
+如果无法明确归类，**不得直接写入 TradingPointDetector。**
+
+---
+
+## 23. 理论依据索引
+
+> 以下链接为公开原文镜像/课程页面。架构引用以原著课文与课程主题为依据，不把镜像站或二手整理视为理论作者。
+
+### 23.1 缠中说禅原著
+
+1. **中枢、盘整、趋势、走势终完美、B2 构成定律**  
+   《教你炒股票17：走势终完美》  
+   https://iczsc.com/read/017/
+
+2. **中枢、走势类型、完成、走势中枢定理**  
+   《教你炒股票18》  
+   https://iczsc.com/read/018/
+
+3. **中枢延伸/级别扩展、GG/DD、ZG/ZD、第三类买卖点**  
+   《教你炒股票20》  
+   https://iczsc.com/read/020/
+
+4. **三类买卖点完备性、B2 空间位置、B2+B3 重合**  
+   《教你炒股票21》  
    https://iczsc.com/read/021/
 
-4. **MACD 对背驰的辅助判断**  
-   《教你炒股票24》：  
+5. **MACD 对背驰的辅助判断**  
+   《教你炒股票24》  
    https://iczsc.com/read/024/
 
-5. **区间套 / 精确大转折点寻找程序**  
-   《教你炒股票27》：  
+6. **趋势背驰/盘整背驰、类一买、区间套**  
+   《教你炒股票27》  
    https://iczsc.com/read/027/
 
-6. **背驰—转折、背驰后的级别演化、低级别精确定位**  
-   《教你炒股票29：转折的力度与级别》：  
-   https://iczsc.com/read/029/  
-   定理整理：https://iczsc.com/theorems/009/
+7. **背驰—转折定理、后三类演化、最后中枢扩展 vs 下跌+盘整**  
+   《教你炒股票29》  
+   https://iczsc.com/read/029/
 
-7. **买卖点级别关系**  
-   《教你炒股票35》：  
-   https://iczsc.com/read/035/  
-   定理整理：https://iczsc.com/theorems/010/
+8. **严格递归级别、实用固定周期级别、买卖点级别定理**  
+   《教你炒股票35》  
+   https://iczsc.com/read/035/
 
-8. **第二类买点由次一级别第一类买点构成**  
-   定理整理：https://iczsc.com/theorems/001/
+9. **走势连接结合性、多义性、重新组合**  
+   《教你炒股票36》  
+   https://iczsc.com/read/036/
 
-9. **小背驰—大转折**  
-   定理整理：https://iczsc.com/theorems/012/
+10. **同级别分解、唯一性、机械化操作**  
+    《教你炒股票38》  
+    https://iczsc.com/read/038/
 
-10. **背驰相关补充**  
-    《教你炒股票43》：  
+11. **背驰级别 vs 当下走势级别、小级别背驰逐步导致大级别转折**  
+    《教你炒股票43》  
     https://iczsc.com/read/043/
 
-### 21.2 都业华课程与公开整理
+12. **显微镜式多级别观察、次级别走势在高级别可抽象成线段、三类买卖点再分辨**  
+    《教你炒股票53》  
+    https://iczsc.com/read/053/
 
-课程目录与公开材料显示，其体系在基础结构、一二三买之后继续覆盖：
+### 23.2 都业华课程/公开资料
 
-- 走势完全分类；
-- 四种终结方式；
-- 二买 / 三买强弱；
-- 中枢重新定义与精确买点；
-- 三买后走势分类；
-- 类二买；
-- 分型重构；
+可直接确认课程主题包括：
+
+- 背驰及盘整背驰；
+- 一买定义及实战；
+- 一买走势分类；
 - 区间套；
-- R 比率；
-- 大小周期组合等。
+- 四种终结模式；
+- 二买定义及实战；
+- 二买走势分类；
+- 走势中枢重新定义；
+- 三买定义及定位；
+- 三买后走势演变。
 
-公开二手资料只能作为 `DU_YEHUA_PRACTICE` 候选依据，具体算法阈值必须继续核验原课程。
+公开课程页示例：
 
-### 21.3 来源标注规则
+- https://www.bilibili.com/video/BV19fiSBXESL/
+- https://www.cls.cn/famousDetails?id=104
 
-建议规则表、测试说明和关键注释使用类似：
+二手整理只能作为候选：
 
-```text
-ORIGINAL_THEORY: Lesson 21 / Trading Point Completeness
-ORIGINAL_THEORY: Lesson 27 / Interval Nesting
-DU_YEHUA_PRACTICE: Four Termination Modes
-PROJECT_POLICY: Single-Level Trading Point Identity v1
-PROJECT_POLICY: QualityProfile v1
-```
-
-来源标签是审计元数据，不要求机械地散落到每一行代码，但任何关键规则必须能够追溯。
+- https://xueqiu.com/7156263423/120106576
+- https://www.meipian.cn/2zswb7ic
 
 ---
 
-## 22. 当前项目边界与迁移原则
+## 24. 当前迁移结论
 
-截至本文设计时，近期开发焦点只允许落在：
-
-```text
-单级别正式结构
-→ 标准 B1/B2/B3 身份
-→ 单级别质量事实
-→ 可配置策略过滤
-→ 严格验证
-```
-
-终局架构中的以下能力当前只做概念 / 接口预留：
-
-- 完整四种终结方式；
-- 真实多级别递归；
-- 区间套；
-- 小转大；
-- 真实低级别末端盘背；
-- 完整跨级别关系图；
-- 走势完全分类状态机；
-- 都业华后续实践扩展；
-- 共振 / 组合信号。
-
-### 22.1 当前代码迁移时必须遵守的方向
-
-后续实现必须逐步收敛到：
+近期代码开发仍然只应聚焦：
 
 ```text
-Detector 不读 QualityProfile
-QualityEvaluator 不改变 TradingPointIdentity
-StrategyFilter 不修改历史结构事实
-Cross-Level 规则只消费真实低级别 Snapshot
+SEGMENT_APPROXIMATION 单层买卖点
+-> Identity / Quality / Strategy 分离
+-> 可配置质量门槛
+-> 严格审计与真实行情验证
 ```
 
-即使当前历史代码中还存在旧实现，也不得因为兼容旧代码而反向修改本架构原则。
+但现在必须明确：
 
-### 22.2 开发纪律
+- 当前单层买点不是终局 canonical recursive detector；
+- 当前 `SegmentCentralZone` 不是 canonical MovementCentralZone；
+- 当前 MACD hard-gated B1 是项目近似技术债；
+- 当前 B2/B3 是 operational approximation；
+- 这些不要求今天全部重写，但从此不得继续把近似路径扩张成唯一理论本体。
 
-**前一层没有通过真实数据、无未来函数、前缀一致性和审计验证，不进入下一层。**
+后续真正递归开发时：
+
+```text
+先 MovementType / DecompositionContext
+再 StructureLevelGraph
+再 strict B2/B3 / 区间套 / 跨级别关系
+```
+
+而不是直接在现有 `Segment` 对象上不断叠加“递归字段”。
 
 ---
 
-## 23. 最终架构原则（一句话版）
+## 25. 最终一句话
 
-> **结构是事实；终结方式解释走势如何结束；B1/B2/B3 是某一级别上的标准身份；强弱是独立质量事实；配置只过滤策略，不重定义买点；递归负责真实级别之间的构成与定位；区间套产生定位关系；共振是多级别事实的上层组合；所有跨级别证据必须来自真实低级别结构。**
+> **市场周期只是观察数据的粒度；走势类型和中枢递归生成理论级别；几何线段不是天然次级别走势；买卖点身份由理论结构及必要 provenance 决定，质量由事实评价，策略只做筛选；区间套负责逐级定位，买点构成负责身份 provenance，共振只是多级别事实之上的组合；当前 Segment 版本作为可用 operational approximation 保留，但终局 canonical 路径必须建立在 MovementType、DecompositionContext 与真实 StructureLevelGraph 之上。**
