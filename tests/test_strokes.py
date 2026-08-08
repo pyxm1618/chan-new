@@ -17,7 +17,9 @@ def mb(i: int, high: float, low: float) -> MergedBar:
     return MergedBar.from_raw(rb(i, high, low), i)
 
 
-def test_check_bi_requires_minimum_merged_bar_count() -> None:
+def test_default_pen_requires_independent_bar_between_fractals() -> None:
+    # 6 根无包含 K 只能容纳两个三 K 分型，二者之间没有独立 K。
+    # 第77课 fixed-level 原著口径要求顶、底分型之间至少有一根 K 不属于任一分型。
     bars = [
         mb(0, 10, 8),
         mb(1, 9, 7),   # 底分型中心
@@ -26,15 +28,35 @@ def test_check_bi_requires_minimum_merged_bar_count() -> None:
         mb(4, 14, 12), # 顶分型中心
         mb(5, 13, 11),
     ]
-    stroke, remaining = check_bi(bars, min_bi_len=6)
+
+    stroke, unchanged = check_bi(bars)
+    assert stroke is None
+    assert unchanged == bars
+
+    # 旧 CZSC-compatible 口径仍可由调用方显式选择，但不能作为默认原著口径。
+    compat, _ = check_bi(bars, min_bi_len=6)
+    assert compat is not None
+
+
+def test_check_bi_requires_minimum_merged_bar_count() -> None:
+    bars = [
+        mb(0, 10, 8),
+        mb(1, 9, 7),   # 底分型中心
+        mb(2, 11, 9),
+        mb(3, 12, 10), # 独立 K
+        mb(4, 13, 11),
+        mb(5, 15, 13), # 顶分型中心
+        mb(6, 14, 12),
+    ]
+    stroke, remaining = check_bi(bars)
     assert stroke is not None
     assert stroke.direction is StrokeDirection.UP
     assert stroke.start_dt == bars[1].dt
-    assert stroke.end_dt == bars[4].dt
-    assert stroke.length == 6
-    assert [x.dt for x in remaining] == [x.dt for x in bars[3:]]
+    assert stroke.end_dt == bars[5].dt
+    assert stroke.length == 7
+    assert [x.dt for x in remaining] == [x.dt for x in bars[4:]]
 
-    rejected, unchanged = check_bi(bars, min_bi_len=7)
+    rejected, unchanged = check_bi(bars, min_bi_len=8)
     assert rejected is None
     assert unchanged == bars
 
