@@ -89,6 +89,57 @@ def _segment_chain(values: list[float]) -> list[Segment]:
     return segments
 
 
+def _segment_with_internal_interval(
+    index: int,
+    *,
+    direction: StrokeDirection,
+    start: float,
+    end: float,
+    internal_low: float,
+    internal_high: float,
+) -> Segment:
+    base = index * 10
+    if direction is StrokeDirection.DOWN:
+        points = (
+            _fractal(base, FractalMark.TOP, start),
+            _fractal(base + 1, FractalMark.BOTTOM, internal_low),
+            _fractal(base + 2, FractalMark.TOP, internal_high),
+            _fractal(base + 3, FractalMark.BOTTOM, end),
+        )
+    else:
+        points = (
+            _fractal(base, FractalMark.BOTTOM, start),
+            _fractal(base + 1, FractalMark.TOP, internal_high),
+            _fractal(base + 2, FractalMark.BOTTOM, internal_low),
+            _fractal(base + 3, FractalMark.TOP, end),
+        )
+
+    strokes = []
+    for offset, (a, b) in enumerate(zip(points, points[1:])):
+        stroke_direction = (
+            StrokeDirection.UP if a.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
+        )
+        strokes.append(
+            Stroke(
+                symbol="TESTUSDT",
+                fx_a=a,
+                fx_b=b,
+                fractals=(a, b),
+                direction=stroke_direction,
+                bars=(a.elements[1], b.elements[1]),
+                index=index * 3 + offset,
+            )
+        )
+    return Segment(
+        symbol="TESTUSDT",
+        fx_a=points[0],
+        fx_b=points[-1],
+        direction=direction,
+        strokes=tuple(strokes),
+        index=index,
+    )
+
+
 def test_three_continuous_segments_form_zone() -> None:
     segments = _segment_chain([10, 20, 12, 18])
     result = detect_segment_central_zones(segments)
@@ -132,6 +183,41 @@ def test_no_three_segment_overlap_means_no_zone() -> None:
     result = detect_segment_central_zones(segments)
     assert result.candidates == ()
     assert result.zones == ()
+
+
+def test_segment_zone_uses_actual_internal_segment_interval() -> None:
+    # 第78课：以线段为最小级别部件时应按线段实际高低区间标准化，不能只看形式端点。
+    segments = [
+        _segment_with_internal_interval(
+            0,
+            direction=StrokeDirection.DOWN,
+            start=100,
+            end=90,
+            internal_low=80,
+            internal_high=110,
+        ),
+        _segment_with_internal_interval(
+            1,
+            direction=StrokeDirection.UP,
+            start=111,
+            end=120,
+            internal_low=95,
+            internal_high=125,
+        ),
+        _segment_with_internal_interval(
+            2,
+            direction=StrokeDirection.DOWN,
+            start=94,
+            end=85,
+            internal_low=88,
+            internal_high=115,
+        ),
+    ]
+
+    assert (segments[0].high, segments[0].low) == (110, 80)
+    result = detect_segment_central_zones(segments)
+    assert len(result.zones) == 1
+    assert (result.zones[0].zd, result.zones[0].zg) == (95, 110)
 
 
 def test_random_chains_match_independent_reference() -> None:
