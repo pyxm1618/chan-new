@@ -74,23 +74,25 @@ def _stroke_chain_from_top(values: list[float]) -> tuple[Stroke, ...]:
 def test_second_case_reverse_feature_sequence_needs_only_standard_fractal() -> None:
     # Lesson 67/77 second case: the reverse (second) feature sequence does not recurse
     # into first/second-case confirmation again. Here its middle feature element is
-    # produced by inclusion: the standard bottom fractal exists, while the project's
-    # generic actual-break rule is still PENDING because the right element has not
-    # exceeded the last raw stroke inside the merged middle element.
+    # produced by inclusion: the standard bottom fractal exists, while the generic
+    # first-sequence actual-break rule is still PENDING because the right element has
+    # not exceeded the last raw stroke inside the merged middle element.
     strokes = _stroke_chain_from_top(
         [30, 20, 24, 18, 25, 16, 26, 17, 25.5]
     )
 
-    generic = segment_module._trace_feature_detector(
+    detector = segment_module._FeatureDetector(
         strokes,
         segment_direction=StrokeDirection.DOWN,
         sequence_start_position=0,
-        feed_start=1,
+        require_actual_break=True,
     )
-    candidate = next(
-        fx for fx in generic.candidates
-        if fx.middle.stroke_positions == (3, 5)
-    )
+    assert detector.add_position(1) is None
+    assert detector.add_position(3) is None
+    assert detector.add_position(5) is None
+    candidate = detector.add_position(7)
+    assert candidate is not None
+    assert candidate.middle.stroke_positions == (3, 5)
     assert candidate.break_status is FeatureBreakStatus.PENDING
 
     reverse = segment_module._start_reverse_attempt(
