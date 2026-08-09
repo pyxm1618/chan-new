@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from chan_monitor import detect_trading_points
+from chan_monitor import detect_trading_points as detect_formal_trading_points
+from chan_monitor.data import demo_bars
+from chan_monitor.engine import analyze_bars
 from chan_monitor.models import (
     Fractal,
     FractalMark,
@@ -16,6 +18,7 @@ from chan_monitor.models import (
 )
 from chan_monitor.segment_central_zones import detect_segment_central_zones
 from chan_monitor.segments import detect_segments
+from chan_monitor.single_level_trading_points import detect_trading_points
 
 
 def _fractal(dt: datetime, mark: FractalMark, value: float, index: int) -> Fractal:
@@ -174,6 +177,7 @@ def _raw_bars(segments: list[Segment]) -> tuple[RawBar, ...]:
 
 
 def _commit_times(segments: list[Segment]) -> dict[str, datetime]:
+    """Synthetic timing used only by the calculation-core unit tests below."""
     return {
         segment.fingerprint: max(segment.end_dt, segment.source_end)
         + timedelta(microseconds=1)
@@ -265,7 +269,7 @@ def test_formal_detector_rejects_intrinsically_invalid_segments_even_with_commit
     ]
     zones = detect_segment_central_zones(invalid).zones
 
-    result = detect_trading_points(
+    result = detect_formal_trading_points(
         invalid,
         zones,
         raw_bars=_raw_bars(invalid),
@@ -303,6 +307,36 @@ def test_detect_segments_outputs_fixed_level_eligible_segments() -> None:
     )
     assert not any(
         diagnostic.code == "FORMAL_SEGMENT_STRUCTURE_INVALID"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_formal_detector_accepts_real_committed_engine_provenance() -> None:
+    analysis = analyze_bars(
+        demo_bars(1000, symbol="BTCUSDT", interval="5m"),
+        left_boundary_anchored=True,
+    )
+
+    assert analysis.segments
+    assert len(analysis.segment_evidence) == len(analysis.segments)
+    assert all(
+        evidence.is_committed
+        and evidence.committed_at is not None
+        and evidence.committed_at_bar_position is not None
+        and evidence.matches_segment(segment)
+        for segment, evidence in zip(analysis.segments, analysis.segment_evidence)
+    )
+
+    zones = detect_segment_central_zones(analysis.segments).zones
+    result = detect_formal_trading_points(
+        analysis.segments,
+        zones,
+        raw_bars=analysis.raw_bars,
+        segment_evidence=analysis.segment_evidence,
+        macd_history_anchored=True,
+    )
+    assert not any(
+        diagnostic.code.startswith("FORMAL_SEGMENT_")
         for diagnostic in result.diagnostics
     )
 
@@ -353,14 +387,15 @@ def test_b3_accepts_exact_segment_zone_boundary_touch() -> None:
     assert b3.zone_index is not None
 
 
-def test_missing_formal_commit_evidence_fails_closed() -> None:
+def test_commit_times_alone_cannot_mint_formal_segment_provenance() -> None:
     segments = _downtrend()
     zones = detect_segment_central_zones(segments).zones
 
-    result = detect_trading_points(
+    result = detect_formal_trading_points(
         segments,
         zones,
         raw_bars=_raw_bars(segments),
+        segment_commit_times=_commit_times(segments),
         macd_history_anchored=True,
     )
 
