@@ -103,3 +103,5 @@ def test_second_case_reverse_feature_sequence_needs_only_standard_fractal() -> N
     )
     assert reverse.confirmed is not None
     assert reverse.confirmed.middle.stroke_positions == (3, 5)
+    assert reverse.confirmed.break_status is FeatureBreakStatus.CONFIRMED
+    assert reverse.confirmed.detected_at_position == reverse.confirmed.right.last_stroke_position == 7
