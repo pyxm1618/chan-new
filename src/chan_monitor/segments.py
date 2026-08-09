@@ -267,7 +267,11 @@ class _FeatureDetector:
                 zip(middle.strokes, middle.stroke_positions),
                 key=lambda item: (item[0].high, item[1]),
             )
-            break_status, detected_at = self._actual_break_up(middle, right)
+            if self.require_actual_break:
+                break_status, detected_at = self._actual_break_up(middle, right)
+            else:
+                break_status = FeatureBreakStatus.CONFIRMED
+                detected_at = right.last_stroke_position
             gap = left.high < middle.low - _EPS
         else:
             is_target = (
@@ -283,14 +287,16 @@ class _FeatureDetector:
                 zip(middle.strokes, middle.stroke_positions),
                 key=lambda item: (item[0].low, -item[1]),
             )
-            break_status, detected_at = self._actual_break_down(middle, right)
+            if self.require_actual_break:
+                break_status, detected_at = self._actual_break_down(middle, right)
+            else:
+                break_status = FeatureBreakStatus.CONFIRMED
+                detected_at = right.last_stroke_position
             gap = left.low > middle.high + _EPS
 
         endpoint = endpoint_stroke.fx_a
         if endpoint.mark is not mark:  # pragma: no cover - 笔方向不变量
             return None
-        if not self.require_actual_break:
-            break_status = FeatureBreakStatus.CONFIRMED
         return FeatureFractal(
             symbol=endpoint.symbol,
             segment_direction=self.segment_direction,
@@ -1517,13 +1523,14 @@ def _trace_feature_detector(
     segment_direction: StrokeDirection,
     sequence_start_position: int,
     feed_start: int,
+    require_actual_break: bool = True,
 ) -> _DetectorTrace:
     """完整回放一个标准特征序列检测器并收集所有候选事件。"""
     detector = _FeatureDetector(
         strokes,
         segment_direction=segment_direction,
         sequence_start_position=sequence_start_position,
-        require_actual_break=True,
+        require_actual_break=require_actual_break,
     )
     candidates: list[FeatureFractal] = []
     seen: set[tuple] = set()
@@ -1568,6 +1575,7 @@ def _start_reverse_attempt(
         segment_direction=_opposite(direction),
         sequence_start_position=endpoint_position,
         feed_start=endpoint_position + 1,
+        require_actual_break=False,
     )
     confirmed = next(
         (
