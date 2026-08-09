@@ -153,7 +153,7 @@ def test_chart_draws_one_light_blue_rectangle_per_valid_zone() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars, left_boundary_anchored=True)
+    result = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
     figure = build_raw_chart(result)
 
     rectangles = [
