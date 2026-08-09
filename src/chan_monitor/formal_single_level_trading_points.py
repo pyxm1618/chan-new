@@ -37,12 +37,18 @@ def detect_trading_points(
     """Formal fixed-level detector with fail-closed Segment qualification.
 
     The calculation core deliberately ignores ``segment.strokes`` as lower-level
-    trading-point evidence. The formal boundary still has to verify that each
-    supplied object is structurally eligible to *be* a Chan Segment before it can
-    participate in the Lesson-57 minimum-level bootstrap.
+    trading-point evidence. The formal boundary verifies both intrinsic Segment
+    structure and provenance. Every supplied Segment must have identity-bound,
+    committed ``SegmentEvidence`` from the Segment engine. A caller-provided
+    commit-time mapping is retained only as a compatibility parameter and is not
+    accepted as a formal credential.
     """
+    del segment_commit_times
     values = tuple(segments)
+    evidence = tuple(segment_evidence)
     issue = _first_segment_structure_issue(values)
+    if issue is None:
+        issue = _first_segment_provenance_issue(values, evidence)
     if issue is not None:
         return TradingPointDetectionResult(
             points=(),
@@ -54,8 +60,10 @@ def detect_trading_points(
         values,
         segment_central_zones,
         raw_bars=raw_bars,
-        segment_evidence=segment_evidence,
-        segment_commit_times=segment_commit_times,
+        segment_evidence=evidence,
+        # Formal commit times are derived exclusively from validated committed
+        # SegmentEvidence. An arbitrary mapping is not a provenance authority.
+        segment_commit_times=None,
         strokes=strokes,
         macd_history_anchored=macd_history_anchored,
         macd_anchor=macd_anchor,
@@ -74,8 +82,12 @@ def validate_trading_points(
     macd_history_anchored: bool = True,
     macd_anchor: MacdAnchor | None = None,
 ) -> tuple[TradingPointDiagnostic, ...]:
+    del segment_commit_times
     values = tuple(segments)
+    evidence = tuple(segment_evidence)
     issue = _first_segment_structure_issue(values)
+    if issue is None:
+        issue = _first_segment_provenance_issue(values, evidence)
     if issue is not None:
         return (issue,)
     return _validate_trading_points(
@@ -83,8 +95,8 @@ def validate_trading_points(
         values,
         zones,
         raw_bars=raw_bars,
-        segment_evidence=segment_evidence,
-        segment_commit_times=segment_commit_times,
+        segment_evidence=evidence,
+        segment_commit_times=None,
         strokes=strokes,
         macd_history_anchored=macd_history_anchored,
         macd_anchor=macd_anchor,
@@ -139,6 +151,37 @@ def _first_segment_structure_issue(
                 return _invalid(segment, f"第 {position - 1}、{position} 条 Segment 方向未交替")
             if not _same_endpoint(previous_segment.fx_b, segment.fx_a):
                 return _invalid(segment, f"第 {position - 1}、{position} 条 Segment 没有共享端点")
+    return None
+
+
+def _first_segment_provenance_issue(
+    segments: tuple[Segment, ...],
+    evidence: tuple[SegmentEvidence, ...],
+) -> TradingPointDiagnostic | None:
+    """Require committed Segment-engine evidence bound to every formal Segment."""
+    if len(evidence) != len(segments):
+        return TradingPointDiagnostic(
+            code="FORMAL_SEGMENT_COMMIT_EVIDENCE_MISSING",
+            message=(
+                "正式单级别买卖点要求每条 Segment 都有对应的 SegmentEvidence；"
+                f"线段 {len(segments)} 条，证据 {len(evidence)} 条"
+            ),
+            dt=segments[0].start_dt if segments else None,
+        )
+
+    for position, (segment, item) in enumerate(zip(segments, evidence)):
+        if not item.matches_segment(segment):
+            return TradingPointDiagnostic(
+                code="FORMAL_SEGMENT_EVIDENCE_IDENTITY_MISMATCH",
+                message=f"第 {position} 条 SegmentEvidence 与 Segment 不匹配，拒绝授予正式身份",
+                dt=segment.start_dt,
+            )
+        if not item.is_committed:
+            return TradingPointDiagnostic(
+                code="FORMAL_SEGMENT_EVIDENCE_UNCOMMITTED",
+                message=f"第 {position} 条 SegmentEvidence 尚未 committed_at，不能用于正式买卖点",
+                dt=segment.start_dt,
+            )
     return None
 
 
