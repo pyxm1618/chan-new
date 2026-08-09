@@ -60,29 +60,48 @@ def _fractal(index: int, mark: FractalMark, value: float) -> Fractal:
 
 
 def _segment_chain(values: list[float]) -> list[Segment]:
-    points = [
-        _fractal(i, FractalMark.BOTTOM if i % 2 == 0 else FractalMark.TOP, value)
+    """Build structurally legal three-stroke Segments for zone-contract tests.
+
+    The internal 90%/10% retracements stay inside each formal endpoint interval,
+    so ordinary fixture expectations remain stable while no test relies on the old
+    one-stroke pseudo-Segment assumption.
+    """
+    outer_points = [
+        _fractal(i * 3, FractalMark.BOTTOM if i % 2 == 0 else FractalMark.TOP, value)
         for i, value in enumerate(values)
     ]
     segments: list[Segment] = []
-    for i, (a, b) in enumerate(zip(points, points[1:])):
+    for i, (a, b) in enumerate(zip(outer_points, outer_points[1:])):
         direction = StrokeDirection.UP if a.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
-        stroke = Stroke(
-            symbol="TESTUSDT",
-            fx_a=a,
-            fx_b=b,
-            fractals=(a, b),
-            direction=direction,
-            bars=(a.elements[1], b.elements[1]),
-            index=i,
-        )
+        delta = b.value - a.value
+        p1_mark = FractalMark.TOP if a.mark is FractalMark.BOTTOM else FractalMark.BOTTOM
+        p2_mark = a.mark
+        p1 = _fractal(i * 3 + 1, p1_mark, a.value + delta * 0.9)
+        p2 = _fractal(i * 3 + 2, p2_mark, a.value + delta * 0.1)
+        points = (a, p1, p2, b)
+        strokes = []
+        for offset, (left, right) in enumerate(zip(points, points[1:])):
+            stroke_direction = (
+                StrokeDirection.UP if left.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
+            )
+            strokes.append(
+                Stroke(
+                    symbol="TESTUSDT",
+                    fx_a=left,
+                    fx_b=right,
+                    fractals=(left, right),
+                    direction=stroke_direction,
+                    bars=(left.elements[1], right.elements[1]),
+                    index=i * 3 + offset,
+                )
+            )
         segments.append(
             Segment(
                 symbol="TESTUSDT",
                 fx_a=a,
                 fx_b=b,
                 direction=direction,
-                strokes=(stroke,),
+                strokes=tuple(strokes),
                 index=i,
             )
         )
@@ -142,6 +161,7 @@ def _segment_with_internal_interval(
 
 def test_three_continuous_segments_form_zone() -> None:
     segments = _segment_chain([10, 20, 12, 18])
+    assert all(segment.stroke_count == 3 for segment in segments)
     result = detect_segment_central_zones(segments)
 
     assert len(result.candidates) == 1
