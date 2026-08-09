@@ -141,6 +141,7 @@ def test_analysis_result_keeps_all_stable_and_provisional_strokes_separate() -> 
 
     result = analyze_bars(
         demo_bars(5000, symbol="BTCUSDT", interval="5m"),
+        min_bi_len=6,
         left_boundary_anchored=True,
     )
     assert result.all_strokes == result.strokes
