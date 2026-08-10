@@ -22,7 +22,11 @@ from chan_monitor.models import TradingPoint, TradingPointType
 def _real_result():
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
-    return analyze_bars(bars_from_csv(path, symbol="BTCUSDT", interval="1h"), left_boundary_anchored=True)
+    return analyze_bars(
+        bars_from_csv(path, symbol="BTCUSDT", interval="1h"),
+        min_bi_len=6,
+        left_boundary_anchored=True,
+    )
 
 
 def test_custom_line_and_zone_styles_are_applied() -> None:

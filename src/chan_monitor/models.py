@@ -365,14 +365,24 @@ class Segment:
         return len(self.strokes)
 
     @property
-    def high(self) -> float:
-        """线段价格区间上沿，以两个真实端点价格计算。"""
+    def endpoint_high(self) -> float:
+        """线段两个形式端点中的较高值。"""
         return max(self.start_value, self.end_value)
 
     @property
-    def low(self) -> float:
-        """线段价格区间下沿，以两个真实端点价格计算。"""
+    def endpoint_low(self) -> float:
+        """线段两个形式端点中的较低值。"""
         return min(self.start_value, self.end_value)
+
+    @property
+    def high(self) -> float:
+        """第78课 fixed-level 标准化所需的线段实际价格区间上沿。"""
+        return max(stroke.high for stroke in self.strokes)
+
+    @property
+    def low(self) -> float:
+        """第78课 fixed-level 标准化所需的线段实际价格区间下沿。"""
+        return min(stroke.low for stroke in self.strokes)
 
     @property
     def power(self) -> float:

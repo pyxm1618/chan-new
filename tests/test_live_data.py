@@ -128,7 +128,7 @@ def test_current_bar_never_enters_confirmed_structure_layer() -> None:
         current_bar=current,
         fetched_at=current.open_time + timedelta(minutes=2),
     )
-    expected = analyze_bars(closed, left_boundary_anchored=True)
+    expected = analyze_bars(closed, min_bi_len=6, left_boundary_anchored=True)
     bundle = analyze_snapshot(
         snapshot,
         czsc_compatibility=True,
@@ -183,8 +183,8 @@ def test_chart_draws_same_color_dashed_provisional_pen_and_segment() -> None:
 
 def test_5000_five_minute_bars_complete_full_structure_pipeline_deterministically() -> None:
     bars = demo_bars(5000, symbol="BTCUSDT", interval="5m")
-    first = analyze_bars(bars, left_boundary_anchored=True)
-    second = analyze_bars(bars, left_boundary_anchored=True)
+    first = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
+    second = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
     assert len(first.raw_bars) == 5000
     assert len(first.merged_bars) == 3721
     assert len(first.fractals) == 851

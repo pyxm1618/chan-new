@@ -2,6 +2,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+from chan_monitor import detect_trading_points as detect_formal_trading_points
+from chan_monitor.data import demo_bars
+from chan_monitor.engine import analyze_bars
 from chan_monitor.models import (
     Fractal,
     FractalMark,
@@ -14,6 +17,7 @@ from chan_monitor.models import (
     TradingPointType,
 )
 from chan_monitor.segment_central_zones import detect_segment_central_zones
+from chan_monitor.segments import detect_segments
 from chan_monitor.single_level_trading_points import detect_trading_points
 
 
@@ -67,6 +71,35 @@ def _stroke(a: Fractal, b: Fractal, index: int, duration: int) -> Stroke:
     return Stroke("TESTUSDT", a, b, (a, b), direction, tuple(bars), index)
 
 
+def _legal_segment(a: Fractal, b: Fractal, index: int, duration: int) -> Segment:
+    direction = StrokeDirection.UP if a.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
+    delta = b.value - a.value
+    p1_mark = FractalMark.TOP if a.mark is FractalMark.BOTTOM else FractalMark.BOTTOM
+    p2_mark = a.mark
+    p1 = _fractal(a.dt + timedelta(minutes=1), p1_mark, a.value + delta * 0.9, index * 10 + 1)
+    p2 = _fractal(b.dt - timedelta(minutes=1), p2_mark, a.value + delta * 0.1, index * 10 + 2)
+
+    outer = _stroke(a, b, index * 10, duration)
+    points = (a, p1, p2, b)
+    strokes = []
+    for offset, (left, right) in enumerate(zip(points, points[1:])):
+        stroke_direction = (
+            StrokeDirection.UP if left.mark is FractalMark.BOTTOM else StrokeDirection.DOWN
+        )
+        strokes.append(
+            Stroke(
+                "TESTUSDT",
+                left,
+                right,
+                (left, right),
+                stroke_direction,
+                outer.bars,
+                index * 3 + offset,
+            )
+        )
+    return Segment("TESTUSDT", a, b, direction, tuple(strokes), index)
+
+
 def _segment_chain(
     values: list[float],
     *,
@@ -92,13 +125,45 @@ def _segment_chain(
             )
         )
 
-    out = []
-    for i, (a, b) in enumerate(zip(points, points[1:])):
-        stroke = _stroke(a, b, i, durations[i])
-        # The production contract under test is explicitly single-level: each
-        # same-level segment deliberately contains exactly one stroke here.
-        out.append(Segment("TESTUSDT", a, b, stroke.direction, (stroke,), i))
-    return out
+    return [
+        _legal_segment(a, b, i, durations[i])
+        for i, (a, b) in enumerate(zip(points, points[1:]))
+    ]
+
+
+def _feature_sequence_strokes(
+    endpoints: list[float],
+    *,
+    start_bottom: bool,
+) -> tuple[Stroke, ...]:
+    """Build a chain whose every three strokes form the intended alternating Segment.
+
+    The two internal points use 60%/30% retracements. This makes the next segment's
+    first and last strokes simultaneously serve as the right feature element that
+    confirms the preceding segment, matching the shared-endpoint construction of the
+    standard feature-sequence algorithm.
+    """
+    values = [float(endpoints[0])]
+    for left, right in zip(endpoints, endpoints[1:]):
+        delta = float(right) - float(left)
+        values.extend((float(left) + delta * 0.6, float(left) + delta * 0.3, float(right)))
+
+    origin = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    points = []
+    for i, value in enumerate(values):
+        bottom = (i % 2 == 0) if start_bottom else (i % 2 == 1)
+        points.append(
+            _fractal(
+                origin + timedelta(minutes=i * 10),
+                FractalMark.BOTTOM if bottom else FractalMark.TOP,
+                value,
+                1000 + i,
+            )
+        )
+    return tuple(
+        _stroke(a, b, i, 8)
+        for i, (a, b) in enumerate(zip(points, points[1:]))
+    )
 
 
 def _raw_bars(segments: list[Segment]) -> tuple[RawBar, ...]:
@@ -112,6 +177,7 @@ def _raw_bars(segments: list[Segment]) -> tuple[RawBar, ...]:
 
 
 def _commit_times(segments: list[Segment]) -> dict[str, datetime]:
+    """Synthetic timing used only by the calculation-core unit tests below."""
     return {
         segment.fingerprint: max(segment.end_dt, segment.source_end)
         + timedelta(microseconds=1)
@@ -124,9 +190,6 @@ def _types(result) -> set[TradingPointType]:
 
 
 def _downtrend() -> list[Segment]:
-    # Segment 4 is the long same-level connector b. Segment 10 is the final
-    # departure c and makes a new low. Segments 11/12 form the first rebound
-    # and retracement after B1; segment 12 ends above the B1 low.
     return _segment_chain(
         [140, 120, 135, 125, 132, 100, 112, 102, 110, 90, 108, 80, 95, 85],
         start_bottom=False,
@@ -145,7 +208,7 @@ def _uptrend() -> list[Segment]:
 
 def test_b1_and_b2_use_only_same_level_segments_and_segment_zones() -> None:
     segments = _downtrend()
-    assert all(len(segment.strokes) == 1 for segment in segments)
+    assert all(len(segment.strokes) == 3 for segment in segments)
     zones = detect_segment_central_zones(segments).zones
 
     result = detect_trading_points(
@@ -170,7 +233,7 @@ def test_b1_and_b2_use_only_same_level_segments_and_segment_zones() -> None:
 
 def test_s1_and_s2_use_only_same_level_segments_and_segment_zones() -> None:
     segments = _uptrend()
-    assert all(len(segment.strokes) == 1 for segment in segments)
+    assert all(len(segment.strokes) == 3 for segment in segments)
     zones = detect_segment_central_zones(segments).zones
 
     result = detect_trading_points(
@@ -189,6 +252,93 @@ def test_s1_and_s2_use_only_same_level_segments_and_segment_zones() -> None:
     assert s2.segment_index == 12
     assert s1.evidence_kind == "SINGLE_LEVEL_TREND_MACD_DIVERGENCE"
     assert s2.evidence_kind == "SINGLE_LEVEL_FIRST_RETRACE"
+
+
+def test_formal_detector_rejects_intrinsically_invalid_segments_even_with_commit_times() -> None:
+    legal = _downtrend()
+    invalid = [
+        Segment(
+            segment.symbol,
+            segment.fx_a,
+            segment.fx_b,
+            segment.direction,
+            (segment.strokes[0],),
+            segment.index,
+        )
+        for segment in legal
+    ]
+    zones = detect_segment_central_zones(invalid).zones
+
+    result = detect_formal_trading_points(
+        invalid,
+        zones,
+        raw_bars=_raw_bars(invalid),
+        segment_commit_times=_commit_times(invalid),
+        macd_history_anchored=True,
+    )
+
+    assert result.points == ()
+    assert any(
+        diagnostic.code == "FORMAL_SEGMENT_STRUCTURE_INVALID"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_detect_segments_outputs_fixed_level_eligible_segments() -> None:
+    outer = [140, 120, 135, 125, 132, 100, 112, 102]
+    strokes = _feature_sequence_strokes(outer, start_bottom=False)
+    detected = detect_segments(strokes)
+
+    assert len(detected.segments) >= 6
+    assert [segment.end_value for segment in detected.segments[:6]] == outer[1:7]
+    assert all(
+        segment.stroke_count >= 3 and segment.stroke_count % 2 == 1
+        for segment in detected.segments
+    )
+
+    segments = list(detected.segments)
+    zones = detect_segment_central_zones(segments).zones
+    result = detect_trading_points(
+        segments,
+        zones,
+        raw_bars=(),
+        segment_commit_times=_commit_times(segments),
+        macd_history_anchored=False,
+    )
+    assert not any(
+        diagnostic.code == "FORMAL_SEGMENT_STRUCTURE_INVALID"
+        for diagnostic in result.diagnostics
+    )
+
+
+def test_formal_detector_accepts_real_committed_engine_provenance() -> None:
+    analysis = analyze_bars(
+        demo_bars(1000, symbol="BTCUSDT", interval="5m"),
+        left_boundary_anchored=True,
+    )
+
+    assert analysis.segments
+    assert len(analysis.segment_evidence) == len(analysis.segments)
+    assert all(
+        evidence.is_committed
+        and evidence.committed_at is not None
+        and evidence.committed_at_bar_position is not None
+        and evidence.matches_segment(segment)
+        for segment, evidence in zip(analysis.segments, analysis.segment_evidence)
+    )
+
+    zones = detect_segment_central_zones(analysis.segments).zones
+    result = detect_formal_trading_points(
+        analysis.segments,
+        zones,
+        raw_bars=analysis.raw_bars,
+        segment_evidence=analysis.segment_evidence,
+        macd_history_anchored=True,
+    )
+    assert not any(
+        diagnostic.code.startswith("FORMAL_SEGMENT_")
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_b2_rejects_first_retracement_that_breaks_b1_low() -> None:
@@ -237,14 +387,15 @@ def test_b3_accepts_exact_segment_zone_boundary_touch() -> None:
     assert b3.zone_index is not None
 
 
-def test_missing_formal_commit_evidence_fails_closed() -> None:
+def test_commit_times_alone_cannot_mint_formal_segment_provenance() -> None:
     segments = _downtrend()
     zones = detect_segment_central_zones(segments).zones
 
-    result = detect_trading_points(
+    result = detect_formal_trading_points(
         segments,
         zones,
         raw_bars=_raw_bars(segments),
+        segment_commit_times=_commit_times(segments),
         macd_history_anchored=True,
     )
 

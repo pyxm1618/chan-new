@@ -21,7 +21,7 @@ def test_real_btcusdt_snapshot_keeps_base_layers_equal_and_records_pen_correctio
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars)
+    result = analyze_bars(bars, min_bi_len=6)
     comparison = compare_with_czsc_reference(result)
     assert len(bars) == 500
     assert len(result.merged_bars) == 336

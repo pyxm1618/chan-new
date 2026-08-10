@@ -96,8 +96,12 @@ def run_frozen_segment_central_zone_reference(
             "start_dt": x.start_dt,
             "end_dt": x.end_dt,
             "direction": x.direction.value,
-            "high": float(max(x.start_value, x.end_value)),
-            "low": float(min(x.start_value, x.end_value)),
+            # Lesson 78: the structural interval of a Segment is the actual
+            # extrema reached by its constituent Strokes.  Keep this frozen
+            # oracle independent from the production Segment.high/low
+            # properties by recomputing the interval directly from strokes.
+            "high": float(max(stroke.high for stroke in x.strokes)),
+            "low": float(min(stroke.low for stroke in x.strokes)),
         }
         for x in segments
     )

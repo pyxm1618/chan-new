@@ -32,10 +32,11 @@ from chan_monitor.segments import (
 )
 
 
-
 def _analyze_bars(*args, **kwargs):
+    kwargs.setdefault("min_bi_len", 6)
     kwargs.setdefault("left_boundary_anchored", True)
     return analyze_bars(*args, **kwargs)
+
 
 def _fractal(index: int, mark: FractalMark, value: float) -> Fractal:
     center = datetime(2024, 1, 1, tzinfo=timezone.utc) + timedelta(hours=index * 10)
@@ -416,7 +417,7 @@ def test_real_snapshot_matches_independent_feature_sequence_reference() -> None:
 def test_batch_and_incremental_results_include_identical_feature_sequences() -> None:
     bars = demo_bars(220)
     expected = _analyze_bars(bars)
-    actual = FractalEngine(left_boundary_anchored=True).extend(bars)
+    actual = FractalEngine(min_bi_len=6, left_boundary_anchored=True).extend(bars)
     assert actual.segment_markers == expected.segment_markers
     assert actual.segments == expected.segments
     assert actual.unfinished_segment_strokes == expected.unfinished_segment_strokes
@@ -485,7 +486,6 @@ def test_5000_bar_feature_sequence_reaches_tail_and_matches_reference() -> None:
         evidence=result.detected_segment_evidence,
         exclude_last_stroke_confirmation=True,
     ) == ()
-
 
 
 def test_gap_waiting_still_migrates_extremes_until_a_later_no_gap_primary_wins() -> None:
@@ -619,6 +619,7 @@ def test_every_confirmed_gap_segment_uses_last_extreme_before_reverse_confirmati
         assert item.end_position == expected_position
         assert final.value == expected.value
 
+
 def test_detected_segment_prefixes_match_the_final_stroke_chain() -> None:
     # 这里只验证纯线段算法对同一最终笔链切片的一致性；原始 K 流的正式结构
     # 单调性由下面的 1000/5000 根提交账本测试覆盖。
@@ -689,7 +690,7 @@ def test_validator_rejects_last_stroke_dependent_segment_even_if_detector_is_run
     from chan_monitor.strokes import detect_strokes
 
     bars = demo_bars(235, symbol="BTCUSDT", interval="5m")
-    strokes = detect_strokes(bars).strokes
+    strokes = detect_strokes(bars, min_bi_len=6).strokes
     pure = detect_segments(strokes, exclude_last_stroke_confirmation=False)
     assert pure.evidence[-1].confirmed_at_position == len(strokes) - 1
 
