@@ -16,6 +16,7 @@ from .data import demo_bars, save_bars_csv
 from .engine import analyze_bars
 from .metadata import AnalysisMetadata
 from .segments import SegmentMode
+from .strokes import DEFAULT_MIN_BI_LEN
 
 
 def main() -> None:
@@ -27,7 +28,7 @@ def main() -> None:
     fetch.add_argument("--interval", default="5m")
     fetch.add_argument("--limit", type=int, default=5000)
     fetch.add_argument("--market", choices=[x.value for x in BinanceMarket], default="spot")
-    fetch.add_argument("--min-bi-len", type=int, default=6)
+    fetch.add_argument("--min-bi-len", type=int, default=DEFAULT_MIN_BI_LEN)
     fetch.add_argument("--segment-mode", choices=[SegmentMode.FEATURE_SEQUENCE.value], default=SegmentMode.FEATURE_SEQUENCE.value)
     fetch.add_argument("--output", default="artifacts/binance_klines.csv")
     fetch.add_argument(
@@ -41,7 +42,7 @@ def main() -> None:
 
     export = sub.add_parser("export-demo", help="导出带水印的模拟数据 HTML")
     export.add_argument("--count", type=int, default=180)
-    export.add_argument("--min-bi-len", type=int, default=6)
+    export.add_argument("--min-bi-len", type=int, default=DEFAULT_MIN_BI_LEN)
     export.add_argument("--segment-mode", choices=[SegmentMode.FEATURE_SEQUENCE.value], default=SegmentMode.FEATURE_SEQUENCE.value)
     export.add_argument("--output", default="artifacts/demo_strokes.html")
 
