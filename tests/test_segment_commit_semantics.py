@@ -121,8 +121,6 @@ def test_segment_exports_include_real_commit_metadata() -> None:
     assert evidence_rows["正式提交原始K位置"].notna().all()
 
 
-
-
 def test_anchor_with_only_one_or_two_remaining_strokes_is_normal_unfinished_tail() -> None:
     result = analyze_bars(
         demo_bars(1000, symbol="BTCUSDT", interval="5m"),
@@ -154,7 +152,7 @@ def test_anchored_validator_keeps_unfinished_tail_feature_scan() -> None:
         symbol="BTCUSDT",
         interval="1h",
     )
-    result = analyze_bars(bars, left_boundary_anchored=True)
+    result = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
 
     issues = validate_segment_chain(
         result.segments,

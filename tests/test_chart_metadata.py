@@ -40,7 +40,7 @@ def test_default_segment_style_is_thinner() -> None:
     root = Path(__file__).resolve().parents[1]
     path = next((root / "artifacts" / "real").glob("*0100_bars.csv"))
     bars = bars_from_csv(path, symbol="BTCUSDT", interval="1h")
-    result = analyze_bars(bars, left_boundary_anchored=True)
+    result = analyze_bars(bars, min_bi_len=6, left_boundary_anchored=True)
     figure = build_raw_chart(result)
     trace = next(x for x in figure.data if x.name == "线段")
     assert trace.line.width == DEFAULT_CHART_STYLE.segment.width

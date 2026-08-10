@@ -56,7 +56,7 @@ from chan_monitor.segments import (
     SegmentValidationTarget,
     validate_segment_chain,
 )
-from chan_monitor.strokes import validate_stroke_chain
+from chan_monitor.strokes import DEFAULT_MIN_BI_LEN, validate_stroke_chain
 
 
 APP_VERSION = "0.10.16"
@@ -296,9 +296,9 @@ with st.sidebar:
         "最小笔长（无包含 K 数）",
         min_value=3,
         max_value=30,
-        value=6,
+        value=DEFAULT_MIN_BI_LEN,
         step=1,
-        help="CZSC v0.9.69 默认值为 6；老笔规则常用 7。",
+        help="第77课 fixed-level 原著默认值为 7；如需冻结 CZSC v0.9.69 兼容口径，请显式选择 6。",
     )
     segment_mode = SegmentMode.FEATURE_SEQUENCE
     trust_left_boundary = st.toggle(
@@ -732,9 +732,7 @@ with segment_central_zone_tab:
             "下载本次原始 K 线 CSV",
             raw_frame(result).to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{result.raw_bars[0].symbol}_{result.raw_bars[0].interval}_raw_bars.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_segment_central_zone_raw_bars_csv",
+            mime="text/csv", use_container_width=True, key="download_segment_central_zone_raw_bars_csv",
         )
 
     st.subheader("全部三线段重叠候选")
@@ -824,9 +822,7 @@ with central_zone_tab:
             "下载本次原始 K 线 CSV",
             raw_frame(result).to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{result.raw_bars[0].symbol}_{result.raw_bars[0].interval}_raw_bars.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_central_zone_raw_bars_csv",
+            mime="text/csv", use_container_width=True, key="download_central_zone_raw_bars_csv",
         )
 
     st.subheader("全部中枢分组")
@@ -950,9 +946,7 @@ with segment_tab:
             "下载本次原始 K 线 CSV",
             raw_frame(result).to_csv(index=False).encode("utf-8-sig"),
             file_name=f"{result.raw_bars[0].symbol}_{result.raw_bars[0].interval}_raw_bars.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="download_segment_feature_raw_bars_csv",
+            mime="text/csv", use_container_width=True, key="download_segment_feature_raw_bars_csv",
         )
 
     st.subheader("逐条线段确认依据")
