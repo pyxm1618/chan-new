@@ -170,7 +170,7 @@ def _first_segment_provenance_issue(
         )
 
     for position, (segment, item) in enumerate(zip(segments, evidence)):
-        if not item.matches_segment(segment):
+        if item.segment_index != segment.index or not item.matches_segment(segment):
             return TradingPointDiagnostic(
                 code="FORMAL_SEGMENT_EVIDENCE_IDENTITY_MISMATCH",
                 message=f"第 {position} 条 SegmentEvidence 与 Segment 不匹配，拒绝授予正式身份",
@@ -180,6 +180,31 @@ def _first_segment_provenance_issue(
             return TradingPointDiagnostic(
                 code="FORMAL_SEGMENT_EVIDENCE_UNCOMMITTED",
                 message=f"第 {position} 条 SegmentEvidence 尚未 committed_at，不能用于正式买卖点",
+                dt=segment.start_dt,
+            )
+
+        committed_at = item.committed_at
+        if (
+            not isinstance(committed_at, datetime)
+            or committed_at.tzinfo is None
+            or committed_at.utcoffset() is None
+        ):
+            return TradingPointDiagnostic(
+                code="FORMAL_SEGMENT_EVIDENCE_COMMIT_TIME_INVALID",
+                message=(
+                    f"第 {position} 条 SegmentEvidence committed_at 必须是带时区的 datetime，"
+                    "不能用于正式买卖点"
+                ),
+                dt=segment.start_dt,
+            )
+        available_at = max(segment.end_dt, segment.source_end)
+        if committed_at < available_at:
+            return TradingPointDiagnostic(
+                code="FORMAL_SEGMENT_EVIDENCE_COMMIT_TIME_INVALID",
+                message=(
+                    f"第 {position} 条 SegmentEvidence committed_at 早于结构可用时间，"
+                    "不能用于正式买卖点"
+                ),
                 dt=segment.start_dt,
             )
     return None
